@@ -2,13 +2,7 @@
 
 ## Purpose
 
-This document identifies the main assets, trust boundaries, threats, and mitigations for the local AI compute broker.
-
-It is not a full formal security review. It is the architectural threat model that should guide implementation and later review.
-
-## Security Objective
-
-Allow remote MCP-capable agents to orchestrate local compute while preventing accidental or unauthorized disclosure of raw sensitive data.
+This document captures the main assets, adversaries, risks, and mitigations that matter for the broker.
 
 ## Primary Assets
 
@@ -17,241 +11,83 @@ The system must protect:
 - source repositories
 - proprietary documents
 - build and runtime logs
-- PHI or regulated data where present
-- generated embeddings and indexes
+- PHI or regulated data
+- embeddings, indexes, and evidence packs
 - candidate patches
-- artifact metadata
-- credentials for storage, database, and cluster access
-- audit trail integrity
+- credentials and audit integrity
 
-## Actors
+## Main Actors
 
-### Trusted Actors
+Trusted or semi-trusted participants:
 
-- authorized developer using MCP-capable agent tooling
+- authorized developer
 - broker service
 - approved worker runtime
-- approved backend scheduler
+- backend scheduler
+- remote orchestrator model
 
-### Semi-Trusted Actors
+The remote orchestrator is useful, but not trusted to receive all local raw data by default.
 
-- remote frontier model acting as orchestrator
+## Key Trust Boundaries
 
-This actor is trusted to assist, but not trusted to automatically receive all local raw data.
+Important boundaries:
 
-### Potential Adversaries
+- remote agent to broker
+- broker to backend
+- backend to worker runtime
+- worker to artifact storage
+- broker to result consumer
 
-- unauthorized internal user
-- compromised worker container
-- compromised broker host
-- malicious or buggy task implementation
-- operator error causing overbroad export or cache reuse
+## Main Threats
 
-## Trust Boundaries
+The highest-value threats are:
 
-### Boundary 1: Remote Agent To Broker
+- raw source or document leakage to remote systems
+- sensitive log leakage in summaries or debug output
+- cross-tenant or cross-project cache leakage
+- overprivileged worker access
+- artifact store overexposure
+- forged or unauthorized job access
+- policy bypass through worker output
+- scheduler drift and orphaned jobs
+- secret exposure in logs
 
-Risk:
+## Core Mitigations
 
-- remote agent requests overly broad access or tries to obtain raw data
+The broker should rely on:
 
-Control:
-
-- broker policy, schema filtering, explicit approval requirements
-
-### Boundary 2: Broker To Backend
-
-Risk:
-
-- scheduler submission metadata leaks sensitive context
-- job tracking becomes inconsistent
-
-Control:
-
-- minimal submission metadata, durable backend run tracking, reconciliation
-
-### Boundary 3: Backend To Worker Runtime
-
-Risk:
-
-- worker gains more filesystem or network access than intended
-
-Control:
-
-- scoped mounts, isolated runtime, explicit input manifests, egress restrictions
-
-### Boundary 4: Worker To Artifact Storage
-
-Risk:
-
-- sensitive artifacts stored insecurely or with incorrect retention
-
-Control:
-
-- typed artifacts, classification-aware retention, access control, hash validation
-
-### Boundary 5: Broker To Result Consumer
-
-Risk:
-
-- raw sensitive output accidentally returned to remote orchestrator
-
-Control:
-
-- pre-release policy evaluation, redaction, approval gates
-
-## Key Threats
-
-### Threat 1: Raw Source Code Leakage
-
-Scenario:
-
-- a repo analysis task returns large source excerpts or full diffs to a remote provider without explicit approval
-
-Mitigations:
-
-- local-only default
-- pre-release policy checks
-- schema design favoring artifact refs over inline excerpts
-- explicit approval for raw export
-
-### Threat 2: Sensitive Log Leakage
-
-Scenario:
-
-- logs contain PHI, tokens, secrets, or internal hostnames and are returned inline
-
-Mitigations:
-
-- deterministic redaction pass
-- classification-aware release rules
-- deny raw log export by default
-
-### Threat 3: Cross-Tenant Cache Leakage
-
-Scenario:
-
-- a cached restricted result is reused for another tenant or project
-
-Mitigations:
-
-- namespace-aware cache keys
-- pre-release policy on cache hits
-- audit logging for restricted cache access
-
-### Threat 4: Overprivileged Worker
-
-Scenario:
-
-- worker scans unrelated directories or uses network egress to exfiltrate data
-
-Mitigations:
-
-- scoped input manifests
-- container isolation
-- egress disabled by default
-- least-privilege runtime identity
-
-### Threat 5: Artifact Store Exposure
-
-Scenario:
-
-- sensitive excerpts or patches remain in storage longer than intended or with overly broad access
-
-Mitigations:
-
-- retention by classification
-- access control on artifacts
-- encryption at rest where required
-
-### Threat 6: Forged Or Unauthorized Job Access
-
-Scenario:
-
-- one user fetches or cancels another user's job
-
-Mitigations:
-
-- authenticated broker API
-- per-job authorization checks
-- project or tenant scoping
-
-### Threat 7: Policy Bypass Through Worker Output
-
-Scenario:
-
-- worker emits sensitive data in an unexpected field or malformed structure
-
-Mitigations:
-
-- schema validation
-- field-level policy handling
-- deny on invalid or unclassified outputs
-
-### Threat 8: Scheduler Drift And Orphaned Jobs
-
-Scenario:
-
-- broker loses track of running jobs after restart or backend inconsistency
-
-Mitigations:
-
-- durable DB state
+- local-first release defaults
+- policy checks before execution and release
+- typed structured outputs
+- constrained worker inputs
+- cache scoping and policy-aware cache keys
+- authenticated job access
+- audit logging
 - backend reconciliation
-- startup recovery logic
-
-### Threat 9: Secret Exposure In Logs
-
-Scenario:
-
-- credentials for artifact storage or database appear in worker or broker logs
-
-Mitigations:
-
-- secret manager usage where possible
-- log redaction
-- minimal environment inheritance
 
 ## Assumptions
 
-The architecture currently assumes:
+This model assumes:
 
-- the local cluster and scheduler are organizationally controlled
-- the broker runs in a trusted environment
-- the remote orchestrator is not treated as fully trusted for raw data
-- approved workers are built from controlled source
-
-If any of these assumptions do not hold, the control set must be strengthened accordingly.
+- the broker is a trusted control-plane component
+- compute nodes can execute approved worker code
+- remote frontier models are orchestration helpers, not default raw-data sinks
 
 ## Security Properties To Preserve
 
-The implementation should preserve these properties:
+The system should preserve:
 
-- raw restricted data does not leave local environment by default
-- result release is mediated by broker policy, not worker choice
-- cache reuse does not widen access
-- scheduler choice does not change confidentiality guarantees
-- audit trail captures sensitive decisions and overrides
-
-## High-Priority Mitigations For MVP
-
-These controls matter most for the first implementation:
-
-1. authenticated broker API
-2. pre-execution and pre-release policy checks
-3. schema-validated worker outputs
-4. scoped worker inputs and output destinations
-5. namespace-safe cache keys
-6. audit logging for approvals and restricted result access
-7. deterministic redaction for logs and excerpts
+- raw local data does not leave by default
+- result release is policy-filtered
+- cached data does not bypass access controls
+- job ownership and audit trails remain attributable
 
 ## Review Triggers
 
-The threat model should be revisited when:
+This threat model should be revisited when:
 
 - a new backend is added
-- a new task type exports materially different artifacts
-- cross-tenant deployment is introduced
-- remote raw export rules are expanded
-- a new model runtime changes output structure or tool behavior
-
+- a new worker class can emit richer artifacts
+- multi-tenant sharing is expanded
+- raw export behavior is broadened
+- storage or auth architecture changes materially

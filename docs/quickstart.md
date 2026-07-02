@@ -118,12 +118,13 @@ The generated Slurm profile assumes one shared GPU partition and expresses tier 
 
 On CDSI, the checked-in defaults are:
 
-- `partition_cpu = "cpu"`
 - `partition_gpu = "hpc"`
 - `gpu_request_mode = "gres"`
 - `gpu_type_p40 = "p40"`
 - `gpu_type_a100 = "a100"`
-- `nodelist_p40 = "pllimsksparky[1-4]"`
+
+The CDSI profile leaves `partition_cpu` unset. CPU indexing jobs therefore run without a broker-specified partition override.
+The CDSI profile also leaves `nodelist_p40` unset because `gpu:p40:1` is already sufficient placement on that cluster.
 
 If you want the P40 tier to prefer a specific node pool directly, also set:
 

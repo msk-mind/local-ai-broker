@@ -18,7 +18,7 @@ Representative examples for this area would include:
 
 Current examples:
 
-- `cdsi-cluster.example.json`: CDSI cluster profile using a shared GPU partition, typed GPU requests, and `pllimsksparky[1-4]` as the default P40 compression lane
+- `cdsi-cluster.example.json`: CDSI cluster profile using a shared GPU partition and typed GPU requests, without unnecessary node pinning
 - `cdsi-cluster.env.example`: environment-variable equivalent of the CDSI cluster profile
 - `local.example.json`: local command-mode development config
 - `slurm-p40-a100.example.json`: Slurm-backed config for a cluster with one shared GPU partition where P40 is the default RAG compression tier and A100 is escalation-only reasoning capacity
@@ -32,6 +32,8 @@ This example is intentionally simple:
 - `a100-reasoning` maps to `BROKER_SLURM_GPU_TYPE_A100`
 
 The broker already maps retry recommendations onto those tier names. The config files close the loop by giving each tier a concrete backend placement.
+
+The CDSI profile intentionally leaves `BROKER_SLURM_PARTITION_CPU` unset because that cluster does not expose a separate CPU partition.
 
 Optional tier-locality controls are also supported:
 

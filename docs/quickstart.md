@@ -15,13 +15,15 @@ The fastest way to validate the current control plane is to use the fake-Slurm e
 Use the bootstrap CLI for the common setup path:
 
 ```bash
-go run ./cmd/local-ai-broker doctor --config configs/broker/local.example.json
-go run ./cmd/local-ai-broker up --config configs/broker/local.example.json
+go run ./cmd/local-ai-broker init --local
+go run ./cmd/local-ai-broker doctor --config configs/broker/generated.local.json
+go run ./cmd/local-ai-broker up --config configs/broker/generated.local.json
 go run ./cmd/local-ai-broker install codex --all
 ```
 
 This gives you:
 
+- generated config with sane defaults
 - environment validation
 - broker startup with sensible defaults
 - Codex profile installation without editing config files manually
@@ -50,16 +52,16 @@ If this succeeds, the local broker control plane is functioning.
 
 This mode is useful when you want to inspect the HTTP API directly.
 
-Recommended local config on this machine or a MacBook:
+Recommended local flow on this machine or a MacBook:
 
 ```bash
-configs/broker/local.example.json
+go run ./cmd/local-ai-broker init --local
 ```
 
 Start the server:
 
 ```bash
-go run ./cmd/local-ai-broker up --config configs/broker/local.example.json
+go run ./cmd/local-ai-broker up --config configs/broker/generated.local.json
 ```
 
 Check health:
@@ -90,7 +92,7 @@ The generated profiles keep broker MCP wiring session-scoped, so a normal `codex
 If your cluster has lightly used P40 nodes and more constrained A100 nodes, start from:
 
 ```bash
-cp configs/broker/slurm-p40-a100.example.json /tmp/local-ai-broker.json
+go run ./cmd/local-ai-broker init --slurm --output /tmp/local-ai-broker.json
 ```
 
 Then edit the partition names if your site uses different labels:

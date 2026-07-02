@@ -98,6 +98,32 @@ func TestLoadBootstrapConfig(t *testing.T) {
 	}
 }
 
+func TestWriteBootstrapConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "generated.local.json")
+	cfg := bootstrapConfig{
+		ListenAddr:   "127.0.0.1:8081",
+		Backend:      "local",
+		JobStorePath: "__REPO_ROOT__/.broker/jobs.json",
+		Local: localBootstrapConfig{
+			Mode:       "command",
+			ScriptPath: "__REPO_ROOT__/deploy/local/broker_worker.sh",
+		},
+	}
+	if err := writeBootstrapConfig(path, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	values, err := loadBootstrapConfig("/repo", path)
+	if err != nil {
+		t.Fatalf("load written config: %v", err)
+	}
+	if values["BROKER_BACKEND"] != "local" {
+		t.Fatalf("unexpected backend: %#v", values)
+	}
+	if values["BROKER_LOCAL_SCRIPT_PATH"] != "/repo/deploy/local/broker_worker.sh" {
+		t.Fatalf("unexpected local script path: %#v", values)
+	}
+}
+
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {

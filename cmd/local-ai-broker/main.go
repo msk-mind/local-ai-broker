@@ -39,6 +39,8 @@ func run(args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "init":
+		return runInit(args[1:])
 	case "doctor":
 		return runDoctor(args[1:])
 	case "install":
@@ -57,10 +59,101 @@ func printRootUsage() {
 	fmt.Print(`local-ai-broker
 
 Usage:
+  local-ai-broker init [--local|--slurm] [--output PATH] [flags]
   local-ai-broker doctor [--local|--slurm] [--config PATH]
   local-ai-broker install codex [--local|--slurm|--all] [--codex-home PATH]
   local-ai-broker up [--local|--slurm] [--listen-addr ADDR] [--config PATH] [--env-file PATH]
 `)
+}
+
+func runInit(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	localMode := fs.Bool("local", false, "generate a local backend config")
+	slurmMode := fs.Bool("slurm", false, "generate a Slurm backend config")
+	outputPath := fs.String("output", "", "config output path")
+	listenAddr := fs.String("listen-addr", "127.0.0.1:8081", "broker listen address")
+	authMode := fs.String("auth-mode", "header", "broker auth mode")
+	localScript := fs.String("local-script", "", "local worker script path")
+	slurmScript := fs.String("slurm-script", "", "Slurm worker script path")
+	partitionCPU := fs.String("partition-cpu", "cpu", "Slurm CPU partition")
+	partitionP40 := fs.String("partition-p40", "hpc", "Slurm P40 partition")
+	partitionA100 := fs.String("partition-a100", "gpu-a100", "Slurm A100 partition")
+	nodelistP40 := fs.String("nodelist-p40", "pllimsksparky[1-4]", "Slurm P40 nodelist")
+	constraintP40 := fs.String("constraint-p40", "", "Slurm P40 constraint")
+	modelP40 := fs.String("model-p40", "gpt-oss-20b.p40", "default P40 model profile")
+	modelA100 := fs.String("model-a100", "qwen3-coder-30b.a100", "default A100 model profile")
+	if err := fs.Parse(args); err != nil {
+		return commandError{message: err.Error(), code: 2}
+	}
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		return err
+	}
+	mode := selectMode(*localMode, *slurmMode, "local")
+	if *outputPath == "" {
+		if mode == "slurm" {
+			*outputPath = filepath.Join(repoRoot, "configs", "broker", "generated.slurm.json")
+		} else {
+			*outputPath = filepath.Join(repoRoot, "configs", "broker", "generated.local.json")
+		}
+	}
+	cfg := bootstrapConfig{
+		ListenAddr:      *listenAddr,
+		JobStorePath:    "__REPO_ROOT__/.broker/jobs.json",
+		RunRootPath:     "__REPO_ROOT__/.broker/runs",
+		RepoRootPath:    "__REPO_ROOT__",
+		AuditLogPath:    "__REPO_ROOT__/.broker/audit.jsonl",
+		AuditVerifyMode: "warn",
+		AuthMode:        *authMode,
+		Backend:         mode,
+	}
+	if mode == "slurm" {
+		slurmScriptPath := *slurmScript
+		if slurmScriptPath == "" {
+			slurmScriptPath = "__REPO_ROOT__/deploy/slurm/broker_worker.slurm"
+		}
+		cfg.Slurm = slurmBootstrapConfig{
+			Mode:          "command",
+			SubmitCmd:     "sbatch",
+			StatusCmd:     "sacct",
+			CancelCmd:     "scancel",
+			ScriptPath:    slurmScriptPath,
+			PartitionCPU:  *partitionCPU,
+			PartitionP40:  *partitionP40,
+			PartitionA100: *partitionA100,
+			NodeListP40:   *nodelistP40,
+			ConstraintP40: *constraintP40,
+			ModelP40:      *modelP40,
+			ModelA100:     *modelA100,
+		}
+		cfg.Runtime = runtimeBootstrapConfig{
+			LlamaCPPTimeoutSeconds: 20,
+		}
+		cfg.Parallel = parallelBootstrapConfig{
+			MaxBatchSize:         32,
+			MaxActiveBatches:     2,
+			MaxAdditionalBatches: 1,
+			MaxRetriedShards:     4,
+		}
+	} else {
+		localScriptPath := *localScript
+		if localScriptPath == "" {
+			localScriptPath = "__REPO_ROOT__/deploy/local/broker_worker.sh"
+		}
+		cfg.Local = localBootstrapConfig{
+			Mode:       "command",
+			ScriptPath: localScriptPath,
+		}
+	}
+	if err := writeBootstrapConfig(*outputPath, cfg); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s\n", *outputPath)
+	fmt.Println("Next:")
+	fmt.Printf("  go run ./cmd/local-ai-broker doctor --config %s\n", *outputPath)
+	fmt.Printf("  go run ./cmd/local-ai-broker up --config %s\n", *outputPath)
+	return nil
 }
 
 func runDoctor(args []string) error {
@@ -449,6 +542,18 @@ func loadBootstrapConfig(repoRoot, path string) (map[string]string, error) {
 		envMap["BROKER_ROOT_ACTION_MAX_RETRIED_SHARDS"] = fmt.Sprintf("%d", cfg.Parallel.MaxRetriedShards)
 	}
 	return envMap, nil
+}
+
+func writeBootstrapConfig(path string, cfg bootstrapConfig) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	content, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	content = append(content, '\n')
+	return os.WriteFile(path, content, 0o644)
 }
 
 func resolveConfigPath(repoRoot, configDir, value string) string {

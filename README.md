@@ -23,6 +23,7 @@ Current implementation includes:
 
 Start here:
 
+- `go run ./cmd/local-ai-broker init --local`
 - `go run ./cmd/local-ai-broker doctor`
 - `go run ./cmd/local-ai-broker up --config configs/broker/local.example.json`
 - `go run ./cmd/local-ai-broker install codex --all`

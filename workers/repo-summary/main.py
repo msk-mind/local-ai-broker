@@ -9,7 +9,10 @@ import time
 from urllib.parse import urlparse, unquote
 
 
-IGNORE_DIRS = {".git", ".broker", "__pycache__", ".pytest_cache", "node_modules"}
+IGNORE_DIRS = {
+    ".git", ".broker", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    ".tox", ".venv", "venv", "env", "node_modules", "site-packages", "build", "dist",
+}
 
 
 def main():

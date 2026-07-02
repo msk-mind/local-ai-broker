@@ -1744,6 +1744,91 @@ func TestGetJobAppliesBrokerRetrievalPolicyWarnings(t *testing.T) {
 	}
 }
 
+func TestGetJobFailsInspectRepoWhenRetrievalQualityIsInsufficient(t *testing.T) {
+	runRoot := t.TempDir()
+	jobStore := store.NewMemoryJobStore()
+	svc := New(
+		jobStore,
+		fakeBackend{
+			status: backends.RunStatus{
+				BackendRunID: "run-1",
+				State:        types.JobStateSucceeded,
+				RawState:     "COMPLETED",
+				ExitCode:     "0:0",
+			},
+		},
+		log.New(io.Discard, "", 0),
+		runRoot,
+		".",
+	)
+
+	now := time.Now().UTC()
+	job := types.Job{
+		ID:           "job_inspect_repo_policy",
+		TaskType:     "inspect_repo",
+		State:        types.JobStateQueued,
+		BackendKind:  "fake",
+		BackendRunID: "run-1",
+		Request: types.SubmitJobRequest{
+			TaskType:     "inspect_repo",
+			OutputSchema: types.OutputSchemaRef{Name: "repo_inspection_pack_v1"},
+			TaskParams:   map[string]any{"query": "audit this repo"},
+			ExecutionProfile: types.ExecutionProfile{
+				Backend: "slurm",
+				Tier:    "p40-rag-compression",
+				Runtime: "llama.cpp",
+			},
+		},
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		SubmittedAt: now,
+	}
+	if err := jobStore.CreateJob(context.Background(), job); err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	jobDir := filepath.Join(runRoot, job.ID)
+	if err := os.MkdirAll(jobDir, 0o755); err != nil {
+		t.Fatalf("mkdir job dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(jobDir, "result.json"), []byte(`{
+  "schema_name": "repo_inspection_pack_v1",
+  "schema_version": "1.0.0",
+  "payload": {
+    "query": "audit this repo",
+    "subsystems": [],
+    "symbols": [],
+    "evidence": [{"id":"ev_001","source_refs":[{"path":"src/main.py","line_start":1,"line_end":2}]}],
+    "policy_signals": {
+      "mode_counts": {"fallback": 1},
+      "degraded_strategies": [{"strategy":"tree_sitter","backend_mode":"fallback"}],
+      "real_backend_required_recommended": true,
+      "warnings": ["LOCAL_RETRIEVAL_DEGRADED"]
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatalf("write result: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(jobDir, "artifacts.json"), []byte(`[]`), 0o644); err != nil {
+		t.Fatalf("write artifacts: %v", err)
+	}
+
+	got, err := svc.GetJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if got.State != types.JobStateFailed {
+		t.Fatalf("expected strict retrieval quality failure, got state=%q job=%#v", got.State, got)
+	}
+	if got.ResultError != "broker_policy_retrieval_quality_insufficient" {
+		t.Fatalf("expected strict retrieval quality result error, got %#v", got.ResultError)
+	}
+	warnings, _ := got.Result.Payload["warnings"].([]any)
+	if !containsAnyString(warnings, []string{"broker_retrieval_quality_gate_failed"}) {
+		t.Fatalf("expected retrieval quality gate warning, got %#v", got.Result.Payload)
+	}
+}
+
 func TestGetJobLogsRedactsAndTruncates(t *testing.T) {
 	runRoot := t.TempDir()
 	jobStore := store.NewMemoryJobStore()
@@ -2499,6 +2584,120 @@ func TestSubmitAndIngestRAGCompressionWorkerTrimsToFinalBudget(t *testing.T) {
 	firstStat, ok := retrievalStats[0].(map[string]any)
 	if !ok || firstStat["backend_mode"] == nil {
 		t.Fatalf("expected backend mode in strategy stats, got %#v", got.Result.Payload)
+	}
+}
+
+func TestSubmitAndIngestRAGCompressionWorkerSkipsDefaultExcludedDirs(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not available")
+	}
+
+	runRoot := t.TempDir()
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+
+	inputRepo := filepath.Join(runRoot, "repo")
+	if err := os.MkdirAll(filepath.Join(inputRepo, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir src: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(inputRepo, ".venv", "lib"), 0o755); err != nil {
+		t.Fatalf("mkdir venv: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(inputRepo, "src", "main.py"), []byte("def run_service():\n    raise RuntimeError('primary failure')\n"), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(inputRepo, ".venv", "lib", "noise.py"), []byte("def bad_dependency():\n    raise RuntimeError('primary failure')\n"), 0o644); err != nil {
+		t.Fatalf("write venv file: %v", err)
+	}
+
+	backend := &mutableFakeBackend{}
+	jobStore := store.NewMemoryJobStore()
+	svc := New(
+		jobStore,
+		backend,
+		log.New(io.Discard, "", 0),
+		runRoot,
+		repoRoot,
+	)
+
+	submitResp, err := svc.SubmitJob(context.Background(), types.SubmitJobRequest{
+		TaskType: "rag_compress",
+		InputRefs: []types.InputRef{
+			{Type: "repo", URI: "file://" + inputRepo, ContentHash: "sha256:test", Classification: "internal"},
+		},
+		TaskParams: map[string]any{
+			"query": "primary failure",
+		},
+		Constraints: types.Constraints{
+			RetrievedChunkBudget:      64000,
+			PerChunkCompressionBudget: 384,
+			FinalEvidencePackBudget:   4000,
+			RemoteModelContextBudget:  12000,
+		},
+		OutputSchema: types.OutputSchemaRef{Name: "rag_evidence_pack_v1"},
+	})
+	if err != nil {
+		t.Fatalf("submit job: %v", err)
+	}
+
+	jobDir := filepath.Join(runRoot, submitResp.JobID)
+	cmd := exec.Command(
+		"python3",
+		filepath.Join(repoRoot, "workers", "rag-compression", "main.py"),
+		"--job-spec", filepath.Join(jobDir, "job_spec.json"),
+		"--input-manifest", filepath.Join(jobDir, "input_manifest.json"),
+		"--output-dir", jobDir,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run rag worker: %v: %s", err, string(output))
+	}
+
+	backend.status = backends.RunStatus{
+		BackendRunID: "run-1",
+		State:        types.JobStateSucceeded,
+		RawState:     "COMPLETED",
+		ExitCode:     "0:0",
+	}
+
+	got, err := svc.GetJob(context.Background(), submitResp.JobID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if got.Result == nil {
+		t.Fatal("expected result")
+	}
+	evidence, _ := got.Result.Payload["evidence"].([]any)
+	if len(evidence) == 0 {
+		t.Fatalf("expected evidence, got %#v", got.Result.Payload)
+	}
+	for _, raw := range evidence {
+		ev, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected evidence shape: %#v", raw)
+		}
+		refs, _ := ev["source_refs"].([]any)
+		for _, sourceRefRaw := range refs {
+			sourceRef, ok := sourceRefRaw.(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected source ref shape: %#v", sourceRefRaw)
+			}
+			path, _ := sourceRef["path"].(string)
+			if strings.Contains(path, ".venv") {
+				t.Fatalf("expected excluded .venv paths to be skipped, got %#v", got.Result.Payload)
+			}
+		}
+	}
+	validationPath := artifactPathForType(got.Artifacts, "validation_report")
+	if validationPath == "" {
+		t.Fatalf("expected validation report artifact path, got %#v", got.Artifacts)
+	}
+	validation := loadJSONFileForTest(t, validationPath)
+	excluded, ok := validation["excluded_dir_names"].([]any)
+	if !ok || !containsAnyString(excluded, []string{".venv"}) {
+		t.Fatalf("expected .venv in excluded dir names, got %#v", validation)
 	}
 }
 

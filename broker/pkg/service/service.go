@@ -1243,11 +1243,32 @@ func applyBrokerResultPolicies(job *types.Job, result *types.Result) {
 			if job.ResultError == "" {
 				job.ResultError = "broker_policy_no_real_retrieval_backend"
 			}
+		case "IGNORED_PATH_RETRIEVAL_CONTAMINATION":
+			existing = appendUniqueString(existing, "broker_ignored_path_retrieval_contamination")
 		}
+	}
+	if requiresStrictRetrievalQuality(*job) && hasAnyString(warnings, []string{
+		"LOCAL_RETRIEVAL_DEGRADED",
+		"NO_REAL_RETRIEVAL_BACKEND",
+		"IGNORED_PATH_RETRIEVAL_CONTAMINATION",
+	}) {
+		existing = appendUniqueString(existing, "broker_retrieval_quality_gate_failed")
+		job.State = types.JobStateFailed
+		job.ResultError = "broker_policy_retrieval_quality_insufficient"
 	}
 	if len(existing) > 0 {
 		payload["warnings"] = stringSliceToAny(existing)
 	}
+}
+
+func requiresStrictRetrievalQuality(job types.Job) bool {
+	if job.TaskType == "inspect_repo" {
+		return true
+	}
+	if job.Request.TaskParams == nil {
+		return false
+	}
+	return boolValue(job.Request.TaskParams["strict_retrieval_quality"])
 }
 
 func (s *Service) extractRuntimeDiagnostics(job types.Job, result types.Result) map[string]any {
@@ -1590,6 +1611,19 @@ func isRAGLikeTask(taskType string) bool {
 	}
 }
 
+func hasAnyString(items []string, expected []string) bool {
+	lookup := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		lookup[item] = struct{}{}
+	}
+	for _, item := range expected {
+		if _, ok := lookup[item]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func collectStringSlice(value any) []string {
 	switch typed := value.(type) {
 	case []string:
@@ -1637,7 +1671,7 @@ func (s *Service) stageExecutionBundle(ctx context.Context, job types.Job) error
 	if err := writeJSONFile(jobSpecPath, map[string]any{
 		"job_id":        job.ID,
 		"task_type":     job.TaskType,
-		"task_params":   job.Request.TaskParams,
+		"task_params":   s.executionTaskParams(job),
 		"output_schema": job.Request.OutputSchema,
 		"constraints":   job.Request.Constraints,
 	}); err != nil {
@@ -1668,6 +1702,31 @@ func (s *Service) stageExecutionBundle(ctx context.Context, job types.Job) error
 	}
 
 	return nil
+}
+
+func (s *Service) executionTaskParams(job types.Job) map[string]any {
+	taskParams := cloneTaskParams(job.Request.TaskParams)
+	taskParams["_broker_exclude_dirs"] = stringSliceToAny(defaultBrokerExcludedDirs())
+	return taskParams
+}
+
+func defaultBrokerExcludedDirs() []string {
+	return []string{
+		".git",
+		".broker",
+		"__pycache__",
+		".pytest_cache",
+		".mypy_cache",
+		".ruff_cache",
+		".tox",
+		".venv",
+		"venv",
+		"env",
+		"node_modules",
+		"site-packages",
+		"build",
+		"dist",
+	}
 }
 
 func defaultModelProfiles() modelProfiles {

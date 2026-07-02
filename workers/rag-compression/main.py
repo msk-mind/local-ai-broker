@@ -15,7 +15,10 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 
-IGNORE_DIRS = {".git", ".broker", "__pycache__", ".pytest_cache", "node_modules"}
+IGNORE_DIRS = {
+    ".git", ".broker", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache",
+    ".tox", ".venv", "venv", "env", "node_modules", "site-packages", "build", "dist",
+}
 TEXT_EXTENSIONS = {
     ".c", ".cc", ".cpp", ".cs", ".go", ".h", ".hpp", ".java", ".js", ".json", ".md",
     ".py", ".rb", ".rs", ".sh", ".sql", ".toml", ".ts", ".tsx", ".txt", ".xml", ".yaml", ".yml",
@@ -88,10 +91,11 @@ def main():
         raise ValueError(f"{task_type} requires at least one input ref")
 
     discovered = discover_inputs(input_refs)
+    excluded_dir_names = excluded_dir_names_for(task_params)
     emit_heartbeat(heartbeat_path, job_spec["job_id"], "running", "chunking", 20, "Chunking local inputs", {
         "input_count": len(discovered),
     })
-    chunks = chunk_inputs(discovered)
+    chunks = chunk_inputs(discovered, excluded_dir_names)
 
     emit_heartbeat(heartbeat_path, job_spec["job_id"], "running", "indexing", 30, "Indexing local chunks", {
         "chunk_count": len(chunks),
@@ -134,6 +138,7 @@ def main():
         rerank_result,
         runtime_context,
         runtime_adapter,
+        excluded_dir_names,
         output_dir,
     )
 
@@ -320,13 +325,13 @@ def resolve_file_uri(uri):
     return Path(unquote(parsed.path))
 
 
-def chunk_inputs(discovered):
+def chunk_inputs(discovered, excluded_dir_names):
     chunks = []
     for item in discovered:
         if item["path"] is None:
             continue
         if item["path"].is_dir():
-            chunks.extend(chunk_repo(item))
+            chunks.extend(chunk_repo(item, excluded_dir_names))
         else:
             chunks.extend(chunk_text_file(item))
     return chunks
@@ -420,11 +425,11 @@ def available_strategies(task_type, discovered):
     return ordered
 
 
-def chunk_repo(item):
+def chunk_repo(item, excluded_dir_names):
     root = item["path"]
     chunks = []
     for path in sorted(root.rglob("*")):
-        if path.is_dir() or should_skip(path, root):
+        if path.is_dir() or should_skip(path, root, excluded_dir_names):
             continue
         if path.suffix.lower() not in TEXT_EXTENSIONS and path.name != "go.mod":
             continue
@@ -1090,7 +1095,7 @@ def semantic_overlap_score(text, query_terms):
     return score
 
 
-def build_retrieval_policy_signals(retrieval_trace):
+def build_retrieval_policy_signals(retrieval_trace, selected_chunks, excluded_dir_names):
     executions = retrieval_trace.get("strategy_executions") or []
     mode_counts = Counter()
     degraded = []
@@ -1108,22 +1113,30 @@ def build_retrieval_policy_signals(retrieval_trace):
         warnings.append("LOCAL_RETRIEVAL_DEGRADED")
     if mode_counts.get("real", 0) == 0:
         warnings.append("NO_REAL_RETRIEVAL_BACKEND")
+    contaminated_paths = [
+        chunk.get("path", "")
+        for chunk in selected_chunks
+        if path_hits_excluded_dir(chunk.get("path", ""), excluded_dir_names)
+    ]
+    if contaminated_paths:
+        warnings.append("IGNORED_PATH_RETRIEVAL_CONTAMINATION")
     return {
         "mode_counts": dict(mode_counts),
         "degraded_strategies": degraded,
         "real_backend_required_recommended": mode_counts.get("fallback", 0) > 0 or mode_counts.get("unavailable", 0) > 0,
         "warnings": warnings,
+        "contaminated_paths": contaminated_paths[:8],
     }
 
 
-def build_result(task_type, job_spec, task_params, constraints, query, discovered, selected_chunks, retrieval, retrieval_plan, retrieval_trace, chunk_manifest, rerank_result, runtime_context, runtime_adapter, output_dir):
+def build_result(task_type, job_spec, task_params, constraints, query, discovered, selected_chunks, retrieval, retrieval_plan, retrieval_trace, chunk_manifest, rerank_result, runtime_context, runtime_adapter, excluded_dir_names, output_dir):
     evidence = build_evidence(selected_chunks, constraints, runtime_adapter)
     evidence, budget_state = enforce_final_pack_budget(evidence, retrieval, constraints)
     retrieval["compression_backend"] = runtime_adapter["name"]
     retrieval["runtime_backend_mode"] = runtime_adapter["backend_mode"]
     retrieval["runtime_backend_detail"] = runtime_adapter["backend_detail"]
-    policy_signals = build_retrieval_policy_signals(retrieval_trace)
-    validation = build_validation_report(job_spec["output_schema"]["name"], evidence, retrieval, retrieval_plan, retrieval_trace, policy_signals, chunk_manifest, rerank_result, budget_state, runtime_context, runtime_adapter)
+    policy_signals = build_retrieval_policy_signals(retrieval_trace, selected_chunks, excluded_dir_names)
+    validation = build_validation_report(job_spec["output_schema"]["name"], evidence, retrieval, retrieval_plan, retrieval_trace, policy_signals, chunk_manifest, rerank_result, budget_state, runtime_context, runtime_adapter, excluded_dir_names)
     warnings = list(validation["warnings"])
     artifacts = build_artifacts(task_type, output_dir, evidence, selected_chunks, retrieval, retrieval_plan, retrieval_trace, chunk_manifest, rerank_result, validation, runtime_context, runtime_adapter)
 
@@ -1480,7 +1493,7 @@ def enforce_final_pack_budget(evidence, retrieval, constraints):
     return kept, state
 
 
-def build_validation_report(schema_name, evidence, retrieval, retrieval_plan, retrieval_trace, policy_signals, chunk_manifest, rerank_result, budget_state, runtime_context, runtime_adapter):
+def build_validation_report(schema_name, evidence, retrieval, retrieval_plan, retrieval_trace, policy_signals, chunk_manifest, rerank_result, budget_state, runtime_context, runtime_adapter, excluded_dir_names):
     warnings = list(budget_state.get("warnings") or [])
     warnings.extend(policy_signals.get("warnings") or [])
     runtime_diagnostics = build_runtime_diagnostics(runtime_context, runtime_adapter)
@@ -1514,6 +1527,7 @@ def build_validation_report(schema_name, evidence, retrieval, retrieval_plan, re
         "runtime_adapter": runtime_adapter,
         "runtime_diagnostics": runtime_diagnostics,
         "policy_signals": policy_signals,
+        "excluded_dir_names": sorted(excluded_dir_names),
         "warnings": warnings,
     }
     if retrieval_plan.get("requested_strategies") and not retrieval["strategies"]:
@@ -1811,9 +1825,28 @@ def estimate_tokens(text):
     return max(1, len(text) // 4)
 
 
-def should_skip(path, root):
+def should_skip(path, root, excluded_dir_names):
     rel_parts = path.relative_to(root).parts
-    return any(part in IGNORE_DIRS for part in rel_parts)
+    return any(part in excluded_dir_names for part in rel_parts)
+
+
+def excluded_dir_names_for(task_params):
+    names = set(IGNORE_DIRS)
+    for key in ("exclude_dirs", "_broker_exclude_dirs"):
+        value = task_params.get(key) or []
+        if not isinstance(value, list):
+            value = [value]
+        for item in value:
+            text = str(item).strip()
+            if text:
+                names.add(text)
+    return names
+
+
+def path_hits_excluded_dir(path, excluded_dir_names):
+    if not path:
+        return False
+    return any(part in excluded_dir_names for part in Path(path).parts)
 
 
 def default_strategies(task_type):

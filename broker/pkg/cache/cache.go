@@ -185,7 +185,7 @@ func shouldIgnoreDir(rel string) bool {
 	parts := strings.Split(rel, "/")
 	for _, part := range parts {
 		switch part {
-		case ".git", ".broker", "__pycache__", ".pytest_cache", "node_modules":
+		case ".git", ".broker", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".venv", "venv", "env", "node_modules", "site-packages", "build", "dist":
 			return true
 		}
 	}

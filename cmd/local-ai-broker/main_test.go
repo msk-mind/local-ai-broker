@@ -99,6 +99,37 @@ func TestLoadBootstrapConfig(t *testing.T) {
 	}
 }
 
+func TestLoadSlurmBootstrapConfigWithGPUTypeDefaults(t *testing.T) {
+	repo := t.TempDir()
+	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "slurm.json")
+	content := `{
+  "backend": "slurm",
+  "slurm": {
+    "partition_gpu": "hpc",
+    "gpu_request_mode": "gres",
+    "gpu_type_p40": "p40",
+    "gpu_type_a100": "a100"
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	values, err := loadBootstrapConfig(repo, configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if values["BROKER_SLURM_PARTITION_GPU"] != "hpc" {
+		t.Fatalf("unexpected GPU partition: %#v", values)
+	}
+	if values["BROKER_SLURM_GPU_REQUEST_MODE"] != "gres" {
+		t.Fatalf("unexpected GPU request mode: %#v", values)
+	}
+	if values["BROKER_SLURM_GPU_TYPE_P40"] != "p40" || values["BROKER_SLURM_GPU_TYPE_A100"] != "a100" {
+		t.Fatalf("unexpected GPU type defaults: %#v", values)
+	}
+}
+
 func TestWriteBootstrapConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "generated.local.json")
 	cfg := bootstrapConfig{

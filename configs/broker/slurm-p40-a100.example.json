@@ -14,8 +14,10 @@
     "cancel_cmd": "scancel",
     "script_path": "__REPO_ROOT__/deploy/slurm/broker_worker.slurm",
     "partition_cpu": "cpu",
-    "partition_p40": "hpc",
-    "partition_a100": "gpu-a100",
+    "partition_gpu": "hpc",
+    "gpu_request_mode": "gres",
+    "gpu_type_p40": "p40",
+    "gpu_type_a100": "a100",
     "nodelist_p40": "pllimsksparky[1-4]",
     "model_profile_p40": "gpt-oss-20b.p40",
     "model_profile_a100": "qwen3-coder-30b.a100"

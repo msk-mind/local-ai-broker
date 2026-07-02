@@ -1,8 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -182,8 +182,12 @@ func runInit(args []string) error {
 	localScript := fs.String("local-script", "", "local worker script path")
 	slurmScript := fs.String("slurm-script", "", "Slurm worker script path")
 	partitionCPU := fs.String("partition-cpu", "cpu", "Slurm CPU partition")
-	partitionP40 := fs.String("partition-p40", "hpc", "Slurm P40 partition")
-	partitionA100 := fs.String("partition-a100", "gpu-a100", "Slurm A100 partition")
+	partitionGPU := fs.String("partition-gpu", "hpc", "shared Slurm GPU partition")
+	partitionP40 := fs.String("partition-p40", "", "legacy tier-specific P40 partition override")
+	partitionA100 := fs.String("partition-a100", "", "legacy tier-specific A100 partition override")
+	gpuRequestMode := fs.String("gpu-request-mode", "gres", "Slurm GPU request mode: gres or gpus")
+	gpuTypeP40 := fs.String("gpu-type-p40", "p40", "Slurm GPU type for the P40 compression tier")
+	gpuTypeA100 := fs.String("gpu-type-a100", "a100", "Slurm GPU type for the A100 reasoning tier")
 	nodelistP40 := fs.String("nodelist-p40", "pllimsksparky[1-4]", "Slurm P40 nodelist")
 	constraintP40 := fs.String("constraint-p40", "", "Slurm P40 constraint")
 	modelP40 := fs.String("model-p40", "gpt-oss-20b.p40", "default P40 model profile")
@@ -219,18 +223,22 @@ func runInit(args []string) error {
 			slurmScriptPath = "__REPO_ROOT__/deploy/slurm/broker_worker.slurm"
 		}
 		cfg.Slurm = slurmBootstrapConfig{
-			Mode:          "command",
-			SubmitCmd:     "sbatch",
-			StatusCmd:     "sacct",
-			CancelCmd:     "scancel",
-			ScriptPath:    slurmScriptPath,
-			PartitionCPU:  *partitionCPU,
-			PartitionP40:  *partitionP40,
-			PartitionA100: *partitionA100,
-			NodeListP40:   *nodelistP40,
-			ConstraintP40: *constraintP40,
-			ModelP40:      *modelP40,
-			ModelA100:     *modelA100,
+			Mode:           "command",
+			SubmitCmd:      "sbatch",
+			StatusCmd:      "sacct",
+			CancelCmd:      "scancel",
+			ScriptPath:     slurmScriptPath,
+			PartitionCPU:   *partitionCPU,
+			PartitionGPU:   *partitionGPU,
+			PartitionP40:   *partitionP40,
+			PartitionA100:  *partitionA100,
+			GPURequestMode: *gpuRequestMode,
+			GPUTypeP40:     *gpuTypeP40,
+			GPUTypeA100:    *gpuTypeA100,
+			NodeListP40:    *nodelistP40,
+			ConstraintP40:  *constraintP40,
+			ModelP40:       *modelP40,
+			ModelA100:      *modelA100,
 		}
 		cfg.Runtime = runtimeBootstrapConfig{
 			LlamaCPPTimeoutSeconds: 20,
@@ -533,19 +541,19 @@ func runUp(args []string) error {
 }
 
 type bootstrapConfig struct {
-	ListenAddr      string                 `json:"listen_addr"`
-	JobStorePath    string                 `json:"job_store_path"`
-	RunRootPath     string                 `json:"run_root_path"`
-	RepoRootPath    string                 `json:"repo_root_path"`
-	AuditLogPath    string                 `json:"audit_log_path"`
-	AuditVerifyMode string                 `json:"audit_verify_mode"`
-	AuthMode        string                 `json:"auth_mode"`
-	MCPActor        string                 `json:"mcp_actor"`
-	MCPRole         string                 `json:"mcp_role"`
-	Backend         string                 `json:"backend"`
-	Local           localBootstrapConfig   `json:"local"`
-	Slurm           slurmBootstrapConfig   `json:"slurm"`
-	Runtime         runtimeBootstrapConfig `json:"runtime"`
+	ListenAddr      string                  `json:"listen_addr"`
+	JobStorePath    string                  `json:"job_store_path"`
+	RunRootPath     string                  `json:"run_root_path"`
+	RepoRootPath    string                  `json:"repo_root_path"`
+	AuditLogPath    string                  `json:"audit_log_path"`
+	AuditVerifyMode string                  `json:"audit_verify_mode"`
+	AuthMode        string                  `json:"auth_mode"`
+	MCPActor        string                  `json:"mcp_actor"`
+	MCPRole         string                  `json:"mcp_role"`
+	Backend         string                  `json:"backend"`
+	Local           localBootstrapConfig    `json:"local"`
+	Slurm           slurmBootstrapConfig    `json:"slurm"`
+	Runtime         runtimeBootstrapConfig  `json:"runtime"`
 	Parallel        parallelBootstrapConfig `json:"parallel"`
 }
 
@@ -561,8 +569,12 @@ type slurmBootstrapConfig struct {
 	CancelCmd      string `json:"cancel_cmd"`
 	ScriptPath     string `json:"script_path"`
 	PartitionCPU   string `json:"partition_cpu"`
+	PartitionGPU   string `json:"partition_gpu"`
 	PartitionP40   string `json:"partition_p40"`
 	PartitionA100  string `json:"partition_a100"`
+	GPURequestMode string `json:"gpu_request_mode"`
+	GPUTypeP40     string `json:"gpu_type_p40"`
+	GPUTypeA100    string `json:"gpu_type_a100"`
 	NodeListCPU    string `json:"nodelist_cpu"`
 	NodeListP40    string `json:"nodelist_p40"`
 	NodeListA100   string `json:"nodelist_a100"`
@@ -584,10 +596,10 @@ type runtimeBootstrapConfig struct {
 }
 
 type parallelBootstrapConfig struct {
-	MaxBatchSize           int `json:"max_batch_size"`
-	MaxActiveBatches       int `json:"max_active_batches"`
-	MaxAdditionalBatches   int `json:"max_additional_batches"`
-	MaxRetriedShards       int `json:"max_retried_shards"`
+	MaxBatchSize         int `json:"max_batch_size"`
+	MaxActiveBatches     int `json:"max_active_batches"`
+	MaxAdditionalBatches int `json:"max_additional_batches"`
+	MaxRetriedShards     int `json:"max_retried_shards"`
 }
 
 func findRepoRoot() (string, error) {
@@ -671,8 +683,12 @@ func loadBootstrapConfig(repoRoot, path string) (map[string]string, error) {
 	set("BROKER_SLURM_CANCEL_CMD", cfg.Slurm.CancelCmd, false)
 	set("BROKER_SLURM_SCRIPT_PATH", cfg.Slurm.ScriptPath, true)
 	set("BROKER_SLURM_PARTITION_CPU", cfg.Slurm.PartitionCPU, false)
+	set("BROKER_SLURM_PARTITION_GPU", cfg.Slurm.PartitionGPU, false)
 	set("BROKER_SLURM_PARTITION_P40", cfg.Slurm.PartitionP40, false)
 	set("BROKER_SLURM_PARTITION_A100", cfg.Slurm.PartitionA100, false)
+	set("BROKER_SLURM_GPU_REQUEST_MODE", cfg.Slurm.GPURequestMode, false)
+	set("BROKER_SLURM_GPU_TYPE_P40", cfg.Slurm.GPUTypeP40, false)
+	set("BROKER_SLURM_GPU_TYPE_A100", cfg.Slurm.GPUTypeA100, false)
 	set("BROKER_SLURM_NODELIST_CPU", cfg.Slurm.NodeListCPU, false)
 	set("BROKER_SLURM_NODELIST_P40", cfg.Slurm.NodeListP40, false)
 	set("BROKER_SLURM_NODELIST_A100", cfg.Slurm.NodeListA100, false)
@@ -821,7 +837,7 @@ func waitForResult(baseURL, jobID string, timeout time.Duration) (string, error)
 			continue
 		}
 		var job struct {
-			State string          `json:"state"`
+			State  string          `json:"state"`
 			Result json.RawMessage `json:"result"`
 		}
 		if err := json.Unmarshal(respBody, &job); err != nil {
@@ -881,14 +897,14 @@ func resolveConfigPath(repoRoot, configDir, value string) string {
 
 func defaultBrokerEnv(repoRoot, mode string) map[string]string {
 	envMap := map[string]string{
-		"GOENV":                  "off",
-		"GOCACHE":                envOr("GOCACHE", "/tmp/local-ai-broker-gocache"),
-		"GOPATH":                 envOr("GOPATH", "/tmp/local-ai-broker-gopath"),
-		"BROKER_LISTEN_ADDR":     envOr("BROKER_LISTEN_ADDR", "127.0.0.1:8081"),
-		"BROKER_JOB_STORE_PATH":  envOr("BROKER_JOB_STORE_PATH", filepath.Join(repoRoot, ".broker", "jobs.json")),
-		"BROKER_RUN_ROOT_PATH":   envOr("BROKER_RUN_ROOT_PATH", filepath.Join(repoRoot, ".broker", "runs")),
-		"BROKER_REPO_ROOT_PATH":  envOr("BROKER_REPO_ROOT_PATH", repoRoot),
-		"BROKER_AUDIT_LOG_PATH":  envOr("BROKER_AUDIT_LOG_PATH", filepath.Join(repoRoot, ".broker", "audit.jsonl")),
+		"GOENV":                    "off",
+		"GOCACHE":                  envOr("GOCACHE", "/tmp/local-ai-broker-gocache"),
+		"GOPATH":                   envOr("GOPATH", "/tmp/local-ai-broker-gopath"),
+		"BROKER_LISTEN_ADDR":       envOr("BROKER_LISTEN_ADDR", "127.0.0.1:8081"),
+		"BROKER_JOB_STORE_PATH":    envOr("BROKER_JOB_STORE_PATH", filepath.Join(repoRoot, ".broker", "jobs.json")),
+		"BROKER_RUN_ROOT_PATH":     envOr("BROKER_RUN_ROOT_PATH", filepath.Join(repoRoot, ".broker", "runs")),
+		"BROKER_REPO_ROOT_PATH":    envOr("BROKER_REPO_ROOT_PATH", repoRoot),
+		"BROKER_AUDIT_LOG_PATH":    envOr("BROKER_AUDIT_LOG_PATH", filepath.Join(repoRoot, ".broker", "audit.jsonl")),
 		"BROKER_AUDIT_VERIFY_MODE": envOr("BROKER_AUDIT_VERIFY_MODE", "warn"),
 	}
 	if mode == "local" {

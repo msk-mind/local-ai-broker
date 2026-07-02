@@ -100,11 +100,15 @@ If your cluster has lightly used P40 nodes and more constrained A100 nodes, star
 ./install.sh --slurm --config-output /tmp/local-ai-broker.json
 ```
 
-Then edit the partition names if your site uses different labels:
+Then edit the placement defaults if your site uses different labels:
 
 - `slurm.partition_cpu`
-- `slurm.partition_p40`
-- `slurm.partition_a100`
+- `slurm.partition_gpu`
+- `slurm.gpu_request_mode`
+- `slurm.gpu_type_p40`
+- `slurm.gpu_type_a100`
+
+The generated Slurm profile assumes one shared GPU partition and expresses tier selection through GPU type requests.
 
 If you want the P40 tier to prefer a specific node pool directly, also set:
 
@@ -130,7 +134,7 @@ local-ai-broker up --config /tmp/local-ai-broker.json
 With that profile:
 
 - ordinary indexing work stays on CPU
-- routine RAG compression defaults to the P40 tier and can prefer `pllimsksparky[1-4]`
+- routine RAG compression defaults to the P40 tier and requests a typed GPU such as `gpu:p40:1`
 - retries or harder patch-generation flows can escalate to the A100 tier
 - workers receive an `execution_plan.json` with the broker-selected model profile, runtime, and runtime connection metadata
 

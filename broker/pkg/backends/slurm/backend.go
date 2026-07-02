@@ -71,6 +71,9 @@ func (b *Backend) SubmitRun(ctx context.Context, job types.Job) (backends.Submit
 	if partition := strings.TrimSpace(selectPartition(job.Request.ExecutionProfile.Tier, b.cfg)); partition != "" {
 		args = append(args, "--partition", partition)
 	}
+	if gpuFlag, gpuValue := selectGPURequest(job.Request.ExecutionProfile, b.cfg); gpuFlag != "" && gpuValue != "" {
+		args = append(args, gpuFlag, gpuValue)
+	}
 	if qos := strings.TrimSpace(job.Request.ExecutionProfile.QOS); qos != "" {
 		args = append(args, "--qos", qos)
 	}
@@ -133,6 +136,9 @@ func (b *Backend) SubmitRunBatch(ctx context.Context, jobs []types.Job) ([]backe
 	}
 	if partition := strings.TrimSpace(selectPartition(jobs[0].Request.ExecutionProfile.Tier, b.cfg)); partition != "" {
 		args = append(args, "--partition", partition)
+	}
+	if gpuFlag, gpuValue := selectGPURequest(jobs[0].Request.ExecutionProfile, b.cfg); gpuFlag != "" && gpuValue != "" {
+		args = append(args, gpuFlag, gpuValue)
 	}
 	if qos := strings.TrimSpace(jobs[0].Request.ExecutionProfile.QOS); qos != "" {
 		args = append(args, "--qos", qos)
@@ -444,11 +450,45 @@ func selectPartition(tier string, cfg config.Config) string {
 	case "cpu-rag-indexing":
 		return cfg.SlurmPartitionCPU
 	case "p40-rag-compression":
-		return cfg.SlurmPartitionP40
+		if value := strings.TrimSpace(cfg.SlurmPartitionP40); value != "" {
+			return value
+		}
+		return cfg.SlurmPartitionGPU
 	case "a100-reasoning":
-		return cfg.SlurmPartitionA100
+		if value := strings.TrimSpace(cfg.SlurmPartitionA100); value != "" {
+			return value
+		}
+		return cfg.SlurmPartitionGPU
 	default:
 		return ""
+	}
+}
+
+func selectGPURequest(profile types.ExecutionProfile, cfg config.Config) (string, string) {
+	tier := strings.TrimSpace(profile.Tier)
+	if tier != "p40-rag-compression" && tier != "a100-reasoning" {
+		return "", ""
+	}
+	accelerator := strings.TrimSpace(profile.Accelerator)
+	if accelerator == "" {
+		switch tier {
+		case "p40-rag-compression":
+			accelerator = strings.TrimSpace(cfg.SlurmGPUTypeP40)
+		case "a100-reasoning":
+			accelerator = strings.TrimSpace(cfg.SlurmGPUTypeA100)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.SlurmGPURequestMode)) {
+	case "gpus":
+		if accelerator != "" {
+			return "--gpus", accelerator + ":1"
+		}
+		return "--gpus", "1"
+	default:
+		if accelerator != "" {
+			return "--gres", "gpu:" + accelerator + ":1"
+		}
+		return "--gres", "gpu:1"
 	}
 }
 

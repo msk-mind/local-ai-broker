@@ -26,8 +26,12 @@ type Config struct {
 	SlurmCancelCmd                 string
 	SlurmScriptPath                string
 	SlurmPartitionCPU              string
+	SlurmPartitionGPU              string
 	SlurmPartitionP40              string
 	SlurmPartitionA100             string
+	SlurmGPURequestMode            string
+	SlurmGPUTypeP40                string
+	SlurmGPUTypeA100               string
 	SlurmNodeListCPU               string
 	SlurmNodeListP40               string
 	SlurmNodeListA100              string
@@ -73,8 +77,12 @@ func Load() Config {
 		SlurmCancelCmd:                 envOrDefault("BROKER_SLURM_CANCEL_CMD", "scancel"),
 		SlurmScriptPath:                envOrDefault("BROKER_SLURM_SCRIPT_PATH", "deploy/slurm/broker_worker.slurm"),
 		SlurmPartitionCPU:              envOrDefault("BROKER_SLURM_PARTITION_CPU", ""),
+		SlurmPartitionGPU:              envOrDefault("BROKER_SLURM_PARTITION_GPU", ""),
 		SlurmPartitionP40:              envOrDefault("BROKER_SLURM_PARTITION_P40", ""),
 		SlurmPartitionA100:             envOrDefault("BROKER_SLURM_PARTITION_A100", ""),
+		SlurmGPURequestMode:            envOrDefault("BROKER_SLURM_GPU_REQUEST_MODE", "gres"),
+		SlurmGPUTypeP40:                envOrDefault("BROKER_SLURM_GPU_TYPE_P40", ""),
+		SlurmGPUTypeA100:               envOrDefault("BROKER_SLURM_GPU_TYPE_A100", ""),
 		SlurmNodeListCPU:               envOrDefault("BROKER_SLURM_NODELIST_CPU", ""),
 		SlurmNodeListP40:               envOrDefault("BROKER_SLURM_NODELIST_P40", ""),
 		SlurmNodeListA100:              envOrDefault("BROKER_SLURM_NODELIST_A100", ""),

@@ -189,10 +189,10 @@ func TestSubmitRunAddsQOSArg(t *testing.T) {
 
 func TestSubmitRunAddsPartitionFromTier(t *testing.T) {
 	cfg := config.Config{
-		SlurmMode:          "command",
-		SlurmSubmitCmd:     "sbatch",
-		SlurmScriptPath:    "deploy/slurm/broker_worker.slurm",
-		SlurmPartitionA100: "a100",
+		SlurmMode:         "command",
+		SlurmSubmitCmd:    "sbatch",
+		SlurmScriptPath:   "deploy/slurm/broker_worker.slurm",
+		SlurmPartitionGPU: "hpc",
 	}
 	runner := &recordingRunner{
 		output: []byte("12345\n"),
@@ -210,8 +210,105 @@ func TestSubmitRunAddsPartitionFromTier(t *testing.T) {
 	if err != nil {
 		t.Fatalf("submit run: %v", err)
 	}
-	if argValueAfter(runner.args, "--partition") != "a100" {
-		t.Fatalf("expected --partition a100, got %#v", runner.args)
+	if argValueAfter(runner.args, "--partition") != "hpc" {
+		t.Fatalf("expected --partition hpc, got %#v", runner.args)
+	}
+	if argValueAfter(runner.args, "--gres") != "gpu:1" {
+		t.Fatalf("expected generic GPU request, got %#v", runner.args)
+	}
+}
+
+func TestSubmitRunAddsTypedGPURequestFromTierDefaults(t *testing.T) {
+	cfg := config.Config{
+		SlurmMode:           "command",
+		SlurmSubmitCmd:      "sbatch",
+		SlurmScriptPath:     "deploy/slurm/broker_worker.slurm",
+		SlurmPartitionGPU:   "hpc",
+		SlurmGPURequestMode: "gres",
+		SlurmGPUTypeP40:     "p40",
+	}
+	runner := &recordingRunner{
+		output: []byte("12345\n"),
+	}
+	backend := NewBackendWithRunner(cfg, runner)
+
+	_, err := backend.SubmitRun(context.Background(), types.Job{
+		TaskType: "rag_compress",
+		Request: types.SubmitJobRequest{
+			ExecutionProfile: types.ExecutionProfile{
+				Tier: "p40-rag-compression",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit run: %v", err)
+	}
+	if argValueAfter(runner.args, "--partition") != "hpc" {
+		t.Fatalf("expected --partition hpc, got %#v", runner.args)
+	}
+	if argValueAfter(runner.args, "--gres") != "gpu:p40:1" {
+		t.Fatalf("expected typed --gres request, got %#v", runner.args)
+	}
+}
+
+func TestSubmitRunPrefersExplicitAcceleratorOverride(t *testing.T) {
+	cfg := config.Config{
+		SlurmMode:           "command",
+		SlurmSubmitCmd:      "sbatch",
+		SlurmScriptPath:     "deploy/slurm/broker_worker.slurm",
+		SlurmPartitionGPU:   "hpc",
+		SlurmGPURequestMode: "gres",
+		SlurmGPUTypeP40:     "p40",
+	}
+	runner := &recordingRunner{
+		output: []byte("12345\n"),
+	}
+	backend := NewBackendWithRunner(cfg, runner)
+
+	_, err := backend.SubmitRun(context.Background(), types.Job{
+		TaskType: "rag_compress",
+		Request: types.SubmitJobRequest{
+			ExecutionProfile: types.ExecutionProfile{
+				Tier:        "p40-rag-compression",
+				Accelerator: "l40s",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit run: %v", err)
+	}
+	if argValueAfter(runner.args, "--gres") != "gpu:l40s:1" {
+		t.Fatalf("expected explicit accelerator override, got %#v", runner.args)
+	}
+}
+
+func TestSubmitRunSupportsGpusFlagMode(t *testing.T) {
+	cfg := config.Config{
+		SlurmMode:           "command",
+		SlurmSubmitCmd:      "sbatch",
+		SlurmScriptPath:     "deploy/slurm/broker_worker.slurm",
+		SlurmPartitionGPU:   "hpc",
+		SlurmGPURequestMode: "gpus",
+		SlurmGPUTypeA100:    "a100",
+	}
+	runner := &recordingRunner{
+		output: []byte("12345\n"),
+	}
+	backend := NewBackendWithRunner(cfg, runner)
+
+	_, err := backend.SubmitRun(context.Background(), types.Job{
+		TaskType: "patch_generation",
+		Request: types.SubmitJobRequest{
+			ExecutionProfile: types.ExecutionProfile{
+				Tier: "a100-reasoning",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit run: %v", err)
+	}
+	if argValueAfter(runner.args, "--gpus") != "a100:1" {
+		t.Fatalf("expected --gpus a100:1, got %#v", runner.args)
 	}
 }
 

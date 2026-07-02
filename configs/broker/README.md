@@ -19,19 +19,21 @@ Representative examples for this area would include:
 Current examples:
 
 - `local.example.json`: local command-mode development config
-- `slurm-p40-a100.example.json`: Slurm-backed config for a cluster where P40 nodes are the default RAG compression tier and A100 nodes are escalation-only reasoning capacity
+- `slurm-p40-a100.example.json`: Slurm-backed config for a cluster with one shared GPU partition where P40 is the default RAG compression tier and A100 is escalation-only reasoning capacity
 - `slurm-p40-a100.env.example`: environment-variable equivalent for shells or existing automation
 
 This example is intentionally simple:
 
 - `cpu-rag-indexing` maps to `BROKER_SLURM_PARTITION_CPU`
-- `p40-rag-compression` maps to `BROKER_SLURM_PARTITION_P40`
-- `a100-reasoning` maps to `BROKER_SLURM_PARTITION_A100`
+- both GPU tiers map to `BROKER_SLURM_PARTITION_GPU`
+- `p40-rag-compression` maps to `BROKER_SLURM_GPU_TYPE_P40`
+- `a100-reasoning` maps to `BROKER_SLURM_GPU_TYPE_A100`
 
 The broker already maps retry recommendations onto those tier names. The config files close the loop by giving each tier a concrete backend placement.
 
 Optional tier-locality controls are also supported:
 
+- `BROKER_SLURM_GPU_REQUEST_MODE`
 - `BROKER_SLURM_NODELIST_CPU`, `BROKER_SLURM_NODELIST_P40`, `BROKER_SLURM_NODELIST_A100`
 - `BROKER_SLURM_CONSTRAINT_CPU`, `BROKER_SLURM_CONSTRAINT_P40`, `BROKER_SLURM_CONSTRAINT_A100`
 - `BROKER_MODEL_PROFILE_CPU`, `BROKER_MODEL_PROFILE_P40`, `BROKER_MODEL_PROFILE_A100`

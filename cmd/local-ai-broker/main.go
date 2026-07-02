@@ -62,6 +62,7 @@ Usage:
   local-ai-broker init [--local|--slurm] [--output PATH] [flags]
   local-ai-broker doctor [--local|--slurm] [--config PATH]
   local-ai-broker install codex [--local|--slurm|--all] [--codex-home PATH]
+  local-ai-broker install binaries [--bin-dir PATH]
   local-ai-broker up [--local|--slurm] [--listen-addr ADDR] [--config PATH] [--env-file PATH]
 `)
 }
@@ -245,11 +246,13 @@ func runDoctor(args []string) error {
 
 func runInstall(args []string) error {
 	if len(args) == 0 {
-		return commandError{message: "usage: local-ai-broker install codex [--local|--slurm|--all] [--codex-home PATH]", code: 2}
+		return commandError{message: "usage: local-ai-broker install <codex|binaries> ...", code: 2}
 	}
 	switch args[0] {
 	case "codex":
 		return runInstallCodex(args[1:])
+	case "binaries":
+		return runInstallBinaries(args[1:])
 	default:
 		return commandError{message: "unknown install target: " + args[0], code: 2}
 	}
@@ -301,6 +304,63 @@ func runInstallCodex(args []string) error {
 	if mode == "slurm" || mode == "all" {
 		fmt.Println("  codex -p slurm-broker")
 	}
+	return nil
+}
+
+func runInstallBinaries(args []string) error {
+	fs := flag.NewFlagSet("install binaries", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	binDir := fs.String("bin-dir", "", "target binary directory")
+	if err := fs.Parse(args); err != nil {
+		return commandError{message: err.Error(), code: 2}
+	}
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		return err
+	}
+	if *binDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return commandError{message: "could not determine default bin directory", code: 1}
+		}
+		*binDir = filepath.Join(home, ".local", "bin")
+	}
+	if err := os.MkdirAll(*binDir, 0o755); err != nil {
+		return err
+	}
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		return commandError{message: "missing required executable: go", code: 1}
+	}
+	targets := []struct {
+		name string
+		pkg  string
+	}{
+		{name: "local-ai-broker", pkg: "./cmd/local-ai-broker"},
+		{name: "broker-server", pkg: "./broker/cmd/broker-server"},
+		{name: "broker-mcp", pkg: "./broker/cmd/broker-mcp"},
+		{name: "broker-cli", pkg: "./broker/cmd/broker-cli"},
+	}
+	for _, target := range targets {
+		outputPath := filepath.Join(*binDir, target.name)
+		cmd := exec.Command(goBin, "build", "-o", outputPath, target.pkg)
+		cmd.Dir = repoRoot
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Env = mergeEnv(map[string]string{
+			"GOENV":   "off",
+			"GOCACHE": envOr("GOCACHE", "/tmp/local-ai-broker-gocache"),
+			"GOPATH":  envOr("GOPATH", "/tmp/local-ai-broker-gopath"),
+		})
+		fmt.Printf("building %s -> %s\n", target.name, outputPath)
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("installed binaries in %s\n", *binDir)
+	fmt.Println("Next:")
+	fmt.Printf("  export PATH=\"%s:$PATH\"\n", *binDir)
+	fmt.Println("  local-ai-broker init --local")
 	return nil
 }
 

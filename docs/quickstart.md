@@ -15,14 +15,17 @@ The fastest way to validate the current control plane is to use the fake-Slurm e
 Use the bootstrap CLI for the common setup path:
 
 ```bash
-go run ./cmd/local-ai-broker init --local
-go run ./cmd/local-ai-broker doctor --config configs/broker/generated.local.json
-go run ./cmd/local-ai-broker up --config configs/broker/generated.local.json
-go run ./cmd/local-ai-broker install codex --all
+go run ./cmd/local-ai-broker install binaries
+export PATH="$HOME/.local/bin:$PATH"
+local-ai-broker init --local
+local-ai-broker doctor --config configs/broker/generated.local.json
+local-ai-broker up --config configs/broker/generated.local.json
+local-ai-broker install codex --all
 ```
 
 This gives you:
 
+- installed broker binaries for normal use
 - generated config with sane defaults
 - environment validation
 - broker startup with sensible defaults
@@ -55,13 +58,15 @@ This mode is useful when you want to inspect the HTTP API directly.
 Recommended local flow on this machine or a MacBook:
 
 ```bash
-go run ./cmd/local-ai-broker init --local
+go run ./cmd/local-ai-broker install binaries
+export PATH="$HOME/.local/bin:$PATH"
+local-ai-broker init --local
 ```
 
 Start the server:
 
 ```bash
-go run ./cmd/local-ai-broker up --config configs/broker/generated.local.json
+local-ai-broker up --config configs/broker/generated.local.json
 ```
 
 Check health:
@@ -75,7 +80,7 @@ If you want to validate the Slurm adapter without a real cluster, use `tests/e2e
 For opt-in Codex setup without changing your default global MCP configuration:
 
 ```bash
-go run ./cmd/local-ai-broker install codex --all
+local-ai-broker install codex --all
 ```
 
 Then use:

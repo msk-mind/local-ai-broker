@@ -124,6 +124,12 @@ func TestWriteBootstrapConfig(t *testing.T) {
 	}
 }
 
+func TestRunInstallRequiresTarget(t *testing.T) {
+	if err := runInstall(nil); err == nil {
+		t.Fatal("expected install usage error")
+	}
+}
+
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {

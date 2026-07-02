@@ -24,9 +24,9 @@ Start here:
 
 - [docs/README.md](docs/README.md)
 - [docs/quickstart.md](docs/quickstart.md)
-- [docs/architecture.md](docs/architecture.md)
-- [docs/rag-compression.md](docs/rag-compression.md)
 - [docs/mcp-tools.md](docs/mcp-tools.md)
+- [docs/rag-compression.md](docs/rag-compression.md)
+- [docs/architecture.md](docs/architecture.md)
 
 Key directories:
 

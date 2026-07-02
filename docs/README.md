@@ -1,11 +1,8 @@
 # Documentation
 
-## Current State
+## Scope
 
-This repository contains:
-
-- a working broker implementation under `broker/`
-- design and planning documents for the broader product direction
+This repository contains a working broker implementation under `broker/` plus the reference docs needed to run it, extend it, and understand its contracts.
 
 The implemented baseline currently includes:
 
@@ -18,14 +15,17 @@ The implemented baseline currently includes:
 - sensitive result and log release filtering
 - tamper-evident audit logging with verification and maintenance tooling
 
-## Design Docs
+## Core Docs
 
-These documents describe the target architecture for evolving the current implementation into a general local AI compute broker for MCP-capable agents.
+Read these first:
 
 - [Broker Quickstart](./quickstart.md)
-- [Architecture](./architecture.md)
-- [RAG Compression](./rag-compression.md)
 - [MCP Tools And Broker API](./mcp-tools.md)
+- [RAG Compression](./rag-compression.md)
+- [Architecture](./architecture.md)
+
+## Reference Docs
+
 - [Data Model](./data-model.md)
 - [Task And Result Schemas](./task-schemas.md)
 - [Backend Interface](./backend-interface.md)
@@ -36,22 +36,13 @@ These documents describe the target architecture for evolving the current implem
 - [Security Model](./security-model.md)
 - [Threat Model](./threat-model.md)
 - [Operations](./operations.md)
-- [Roadmap](./roadmap.md)
-
-## Positioning
-
-The design docs treat the current implementation as the starting point for a broader broker architecture:
-
-- Slurm is the first backend
-- local model runtimes are one worker/runtime mechanism
-- the primary product becomes the broker control plane and its job/result contracts
 
 ## Reading Order
 
 For a quick orientation:
 
 1. read [Broker Quickstart](./quickstart.md)
-2. read [Architecture](./architecture.md)
-3. read [MCP Tools And Broker API](./mcp-tools.md)
-4. read [Operations](./operations.md)
-5. read [Roadmap](./roadmap.md)
+2. read [MCP Tools And Broker API](./mcp-tools.md)
+3. read [RAG Compression](./rag-compression.md)
+4. read [Architecture](./architecture.md)
+5. read [Operations](./operations.md)

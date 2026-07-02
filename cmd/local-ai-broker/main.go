@@ -504,6 +504,16 @@ func runUp(args []string) error {
 		return err
 	}
 	envMap := defaultBrokerEnv(repoRoot, mode)
+	if *configPath == "" && *envFile == "" {
+		if implicitConfig := defaultBootstrapConfigPath(repoRoot, mode); implicitConfig != "" {
+			if loaded, err := loadBootstrapConfig(repoRoot, implicitConfig); err == nil {
+				for k, v := range loaded {
+					envMap[k] = v
+				}
+				*configPath = implicitConfig
+			}
+		}
+	}
 	if *configPath != "" {
 		loaded, err := loadBootstrapConfig(repoRoot, *configPath)
 		if err != nil {
@@ -906,13 +916,41 @@ func resolveConfigPath(repoRoot, configDir, value string) string {
 	return filepath.Clean(filepath.Join(configDir, value))
 }
 
+func defaultBootstrapConfigPath(repoRoot, mode string) string {
+	candidates := []string{}
+	if mode == "slurm" {
+		candidates = append(candidates,
+			filepath.Join(repoRoot, "configs", "broker", "generated.cdsi-slurm.json"),
+			filepath.Join(repoRoot, "configs", "broker", "generated.slurm.json"),
+		)
+	} else {
+		candidates = append(candidates,
+			filepath.Join(repoRoot, "configs", "broker", "generated.local.json"),
+		)
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
+}
+
 func defaultBrokerEnv(repoRoot, mode string) map[string]string {
+	listenAddr := envOr("BROKER_LISTEN_ADDR", "")
+	if listenAddr == "" {
+		if picked, err := pickFreeLoopbackAddr(); err == nil {
+			listenAddr = picked
+		} else {
+			listenAddr = "127.0.0.1:8081"
+		}
+	}
 	envMap := map[string]string{
 		"GOENV":                    "off",
 		"GOCACHE":                  envOr("GOCACHE", "/tmp/local-ai-broker-gocache"),
 		"GOPATH":                   envOr("GOPATH", "/tmp/local-ai-broker-gopath"),
 		"CGO_ENABLED":              "0",
-		"BROKER_LISTEN_ADDR":       envOr("BROKER_LISTEN_ADDR", "127.0.0.1:8081"),
+		"BROKER_LISTEN_ADDR":       listenAddr,
 		"BROKER_JOB_STORE_PATH":    envOr("BROKER_JOB_STORE_PATH", filepath.Join(repoRoot, ".broker", "jobs.json")),
 		"BROKER_RUN_ROOT_PATH":     envOr("BROKER_RUN_ROOT_PATH", filepath.Join(repoRoot, ".broker", "runs")),
 		"BROKER_REPO_ROOT_PATH":    envOr("BROKER_REPO_ROOT_PATH", repoRoot),

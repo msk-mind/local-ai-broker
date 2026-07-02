@@ -1,0 +1,32 @@
+{
+  "listen_addr": "127.0.0.1:46149",
+  "job_store_path": "__REPO_ROOT__/.broker/jobs.json",
+  "run_root_path": "__REPO_ROOT__/.broker/runs",
+  "repo_root_path": "__REPO_ROOT__",
+  "audit_log_path": "__REPO_ROOT__/.broker/audit.jsonl",
+  "audit_verify_mode": "warn",
+  "auth_mode": "header",
+  "backend": "slurm",
+  "slurm": {
+    "mode": "command",
+    "submit_cmd": "sbatch",
+    "status_cmd": "sacct",
+    "cancel_cmd": "scancel",
+    "script_path": "__REPO_ROOT__/deploy/slurm/broker_worker.slurm",
+    "partition_gpu": "hpc",
+    "gpu_request_mode": "gres",
+    "gpu_type_p40": "p40",
+    "gpu_type_a100": "a100",
+    "model_profile_p40": "gpt-oss-20b.p40",
+    "model_profile_a100": "qwen3-coder-30b.a100"
+  },
+  "runtime": {
+    "llama_cpp_timeout_seconds": 20
+  },
+  "parallel": {
+    "max_batch_size": 32,
+    "max_active_batches": 2,
+    "max_additional_batches": 1,
+    "max_retried_shards": 4
+  }
+}

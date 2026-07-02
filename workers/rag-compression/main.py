@@ -84,6 +84,9 @@ def main():
 
     emit_heartbeat(heartbeat_path, job_spec["job_id"], "running", "discovering_inputs", 10, "Discovering local inputs", {})
     task_type = job_spec["task_type"]
+    if task_type == "inspect_repo" and runtime_adapter.get("name") == "deterministic":
+        runtime_adapter["backend_mode"] = "real"
+        runtime_adapter["backend_detail"] = "deterministic_repo_inspection"
     task_params = job_spec.get("task_params") or {}
     constraints = job_spec.get("constraints") or {}
     input_refs = input_manifest.get("input_refs") or []
@@ -408,6 +411,8 @@ def available_strategies(task_type, discovered):
         if task_type == "debug_with_local_context":
             strategies.append("stack_trace_path")
     if "repo" in input_types or "file" in input_types:
+        if task_type == "inspect_repo":
+            strategies.append("repo_structure")
         strategies.extend(["ripgrep", "bm25", "tree_sitter"])
         if task_type in {"debug_with_local_context", "propose_patch"}:
             strategies.append("git_diff_history")
@@ -617,6 +622,7 @@ def discover_tree_sitter_grammars():
 
 def build_strategy_executors():
     return {
+        "repo_structure": repo_structure_executor,
         "bm25": bm25_executor,
         "ripgrep": ripgrep_executor,
         "tree_sitter": tree_sitter_executor,
@@ -798,6 +804,83 @@ def bm25_executor(executor_context, chunk, task_type, query_terms, task_params):
         score += log_signal_score(text)
         reasons.append("log_signal")
     return score, unique_preserving_order(reasons), {"backend_mode": "heuristic", "backend_detail": "deterministic_bm25"}
+
+
+def repo_structure_executor(executor_context, chunk, task_type, query_terms, task_params):
+    if task_type != "inspect_repo" or chunk["input_type"] not in {"repo", "file"}:
+        return 0.0, [], {"backend_mode": "unavailable", "backend_detail": "input_type_not_supported"}
+
+    path = chunk["path"].lower()
+    parts = [part for part in path.split("/") if part]
+    filename = parts[-1] if parts else path
+    score = 1.0
+    reasons = ["repo_structure_scan"]
+
+    if len(parts) <= 2:
+        score += 2.2
+        reasons.append("near_repo_root")
+    elif len(parts) == 3:
+        score += 1.4
+        reasons.append("shallow_repo_path")
+
+    important_dirs = {
+        "cmd": 1.8,
+        "app": 1.6,
+        "apps": 1.6,
+        "broker": 2.0,
+        "config": 1.2,
+        "configs": 1.2,
+        "deploy": 1.2,
+        "internal": 1.8,
+        "pkg": 1.8,
+        "scripts": 1.0,
+        "src": 1.6,
+        "tests": 1.0,
+        "worker": 1.6,
+        "workers": 1.6,
+    }
+    for part in parts[:-1]:
+        if part in important_dirs:
+            score += important_dirs[part]
+            reasons.append("important_dir")
+
+    important_files = {
+        "go.mod": 2.5,
+        "package.json": 2.2,
+        "pyproject.toml": 2.2,
+        "cargo.toml": 2.2,
+        "readme.md": 1.6,
+        "main.go": 2.2,
+        "main.py": 2.2,
+        "app.py": 2.0,
+        "server.go": 2.0,
+        "server.py": 2.0,
+        "index.ts": 1.8,
+        "index.js": 1.8,
+    }
+    if filename in important_files:
+        score += important_files[filename]
+        reasons.append("important_file")
+
+    if chunk["line_start"] == 1:
+        score += 0.6
+        reasons.append("file_entry_chunk")
+
+    if re.search(r"\b(func|class|def|type|interface|struct)\b", chunk["content"]):
+        score += 0.6
+        reasons.append("definition_chunk")
+
+    symbol = detect_symbol(chunk["content"])
+    if symbol:
+        score += 0.8
+        reasons.append("symbol_detected")
+
+    for term in query_terms:
+        if term in path:
+            score += 2.0
+            reasons.append("query_path_overlap")
+
+    return score, unique_preserving_order(reasons), {"backend_mode": "real", "backend_detail": "repo_structure_scan"}
 
 
 def ripgrep_executor(executor_context, chunk, task_type, query_terms, task_params):
@@ -1853,7 +1936,7 @@ def default_strategies(task_type):
     if task_type == "summarize_logs":
         return ["ripgrep", "bm25"]
     if task_type == "inspect_repo":
-        return ["tree_sitter", "ripgrep", "bm25"]
+        return ["repo_structure", "tree_sitter", "ripgrep", "bm25"]
     if task_type == "debug_with_local_context":
         return ["stack_trace_path", "ripgrep", "git_diff_history"]
     if task_type == "propose_patch":

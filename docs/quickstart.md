@@ -91,6 +91,11 @@ codex -p local-broker
 ```
 
 The generated profiles keep broker MCP wiring session-scoped, so a normal `codex` launch stays unchanged.
+Those profiles do not depend on a separately running `local-ai-broker up ...` process.
+Each `codex -p ...` session starts its own stdio `broker-mcp` process through `examples/mcp-clients/run_broker_mcp.sh`.
+
+Use the profile path when you want Codex to talk to the broker over MCP.
+Use `local-ai-broker up ...` only when you want the broker HTTP server directly for `curl`, `broker-cli`, or manual API debugging.
 
 ## Option 2B: Run The Broker Against A Real Slurm Cluster
 

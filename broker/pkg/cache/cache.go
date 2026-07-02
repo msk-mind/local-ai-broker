@@ -95,7 +95,7 @@ func FindCompletedJobByCacheKey(ctx context.Context, jobStore store.JobStore, ca
 
 func isCacheableTask(taskType string) bool {
 	switch taskType {
-	case "document_summary", "log_analysis", "repo_summary", "rag_compress", "summarize_logs", "inspect_repo", "debug_with_local_context":
+	case "document_summary", "log_analysis", "repo_summary", "rag_compress", "summarize_logs", "debug_with_local_context":
 		return true
 	default:
 		return false

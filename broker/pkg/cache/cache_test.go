@@ -126,3 +126,27 @@ func TestKeyForRequestChangesWhenExecutionProfileChanges(t *testing.T) {
 		t.Fatalf("expected cache key to change when model changes, got %q", keyA)
 	}
 }
+
+func TestKeyForRequestInspectRepoIsNotCacheable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# demo\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+
+	key, cacheable, err := KeyForRequest(types.SubmitJobRequest{
+		TaskType: "inspect_repo",
+		InputRefs: []types.InputRef{
+			{Type: "repo", URI: "file://" + dir},
+		},
+		OutputSchema: types.OutputSchemaRef{Name: "repo_inspection_pack_v1"},
+	})
+	if err != nil {
+		t.Fatalf("key for request: %v", err)
+	}
+	if cacheable {
+		t.Fatalf("expected inspect_repo to be uncacheable, got key=%q", key)
+	}
+	if key != "" {
+		t.Fatalf("expected empty key for uncacheable inspect_repo, got %q", key)
+	}
+}

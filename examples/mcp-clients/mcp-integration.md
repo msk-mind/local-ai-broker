@@ -17,6 +17,12 @@ That wrapper:
 - launches `broker/cmd/broker-mcp`
 - works around the local `GOROOT` mismatch by unsetting it before `go run`
 
+Important distinction:
+
+- `codex -p local-broker` and `codex -p slurm-broker` use this stdio MCP path directly
+- they do not require a separate `local-ai-broker up ...` process to be running
+- `local-ai-broker up ...` is only for the broker HTTP server
+
 ## Generic Stdio Definition
 
 If your MCP client accepts a stdio server definition with `command`, `args`, and `env`, use the pattern in [generic-stdio-config.json](./generic-stdio-config.json).
@@ -114,6 +120,10 @@ codex -p local-broker
 
 The `slurm-broker` profile targets the Slurm-backed P40 tier.
 The `local-broker` profile targets the local command backend on the current machine.
+
+When one of these profiles is active, Codex starts its own stdio MCP broker process.
+Do not start `local-ai-broker up --slurm` or `local-ai-broker up --local` just to use the Codex profile.
+Start `up` only if you also want the HTTP API available separately.
 
 ## Broker-First Scope
 

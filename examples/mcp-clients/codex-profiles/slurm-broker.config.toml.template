@@ -1,3 +1,25 @@
+developer_instructions = """
+When this broker profile is active, use the `local-ai-compute-broker` MCP server by default for local context work.
+
+Use broker tools first for:
+- repository inspection
+- log analysis
+- retrieval/compression of local context
+- local debugging passes over code or logs
+- patch-oriented investigation when broker evidence is useful
+
+Prefer `inspect_repo`, `summarize_logs`, `debug_with_local_context`, `rag_compress`, and `propose_patch` over direct ad hoc repository inspection when the task can be broker-mediated.
+
+Prefer the broker's scheduler-backed execution path when the task is likely to benefit from on-prem compute or cluster placement.
+
+Only skip the broker when:
+- the task is trivial and does not benefit from local retrieval or compression
+- the broker is unavailable
+- the broker result is degraded, non-authoritative, or clearly insufficient for the task
+
+If the broker returns degraded retrieval quality, treat it as non-authoritative and verify directly in the repo before making strong claims.
+"""
+
 mcp_servers."local-ai-compute-broker".command = "__REPO_ROOT__/examples/mcp-clients/run_broker_mcp.sh"
 mcp_servers."local-ai-compute-broker".startup_timeout_sec = 60
 

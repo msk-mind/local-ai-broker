@@ -205,6 +205,92 @@ func TestLocalBackendRAGLlamaCPPRuntimeUnavailableFallsBack(t *testing.T) {
 	}
 }
 
+func TestLocalBackendInspectRepoUsesStructureRetrievalWithoutLLM(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	if _, err := os.Stat("/usr/bin/python3"); err != nil {
+		t.Skip("python3 not available")
+	}
+
+	runRoot := t.TempDir()
+	repoDir := repoRoot(t)
+	inputRepo := filepath.Join(t.TempDir(), "repo")
+	writeTestFile(t, filepath.Join(inputRepo, "cmd", "demo", "main.go"), "package main\n\nfunc main() {}\n")
+	writeTestFile(t, filepath.Join(inputRepo, "broker", "pkg", "service", "service.go"), "package service\n\ntype Service struct{}\n")
+	writeTestFile(t, filepath.Join(inputRepo, "README.md"), "# Demo repo\n")
+
+	backend := localbackend.NewBackend(config.Config{
+		LocalMode:       "command",
+		LocalScriptPath: filepath.Join(repoDir, "deploy", "local", "broker_worker.sh"),
+		RunRootPath:     runRoot,
+		RepoRootPath:    repoDir,
+	})
+	svc := service.NewWithAuditAndOptionsAndConfig(
+		store.NewMemoryJobStore(),
+		backend,
+		log.New(io.Discard, "", 0),
+		audit.NewNopLogger(),
+		runRoot,
+		repoDir,
+		service.Options{},
+		&config.Config{},
+	)
+
+	resp, err := svc.SubmitJob(context.Background(), types.SubmitJobRequest{
+		TaskType: "inspect_repo",
+		InputRefs: []types.InputRef{
+			{Type: "repo", URI: "file://" + inputRepo, Classification: "internal"},
+		},
+		TaskParams: map[string]any{
+			"query": "audit this repo",
+		},
+		Constraints: types.Constraints{
+			RetrievedChunkBudget:      16000,
+			PerChunkCompressionBudget: 192,
+			FinalEvidencePackBudget:   1200,
+			RemoteModelContextBudget:  4000,
+		},
+		ExecutionProfile: types.ExecutionProfile{
+			Backend: "local",
+			Tier:    "cpu-rag-indexing",
+		},
+		OutputSchema: types.OutputSchemaRef{Name: "repo_inspection_pack_v1"},
+	})
+	if err != nil {
+		t.Fatalf("submit inspect_repo job: %v", err)
+	}
+
+	job := waitForJob(t, svc, resp.JobID, 15*time.Second)
+	if job.State != types.JobStateSucceeded || job.Result == nil {
+		t.Fatalf("expected succeeded inspect_repo result, got state=%q result=%#v", job.State, job.Result)
+	}
+	if job.DegradedLocalExecution {
+		t.Fatalf("expected inspect_repo not to be degraded, got %#v", job)
+	}
+	if job.RetryRecommended {
+		t.Fatalf("expected retry_recommended=false, got %#v", job)
+	}
+	if job.ExecutionQuality != "real_local" {
+		t.Fatalf("expected execution_quality real_local, got %#v", job.ExecutionQuality)
+	}
+
+	if job.RuntimeDiagnostics == nil {
+		t.Fatalf("expected runtime diagnostics, got %#v", job)
+	}
+	if job.RuntimeDiagnostics["backend_mode"] != "real" {
+		t.Fatalf("expected runtime backend_mode=real, got %#v", job.RuntimeDiagnostics)
+	}
+
+	warnings, _ := job.Result.Payload["warnings"].([]any)
+	for _, warning := range warnings {
+		text, _ := warning.(string)
+		if text == "broker_no_real_retrieval_backend" || text == "broker_retrieval_quality_gate_failed" {
+			t.Fatalf("unexpected retrieval quality warning in %#v", job.Result.Payload)
+		}
+	}
+}
+
 func readArtifactJSON(t *testing.T, artifacts []types.Artifact, artifactID string) map[string]any {
 	t.Helper()
 

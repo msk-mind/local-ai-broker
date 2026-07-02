@@ -447,7 +447,8 @@ func toolDefinitions() []map[string]any {
 			"execution_profile":    ragExecutionProfileSchema(),
 			"idempotency_key":      map[string]any{"type": "string"},
 		}),
-		ragToolDefinition("inspect_repo", "Build or reuse local repository indexes and return compressed code evidence for a question.", []string{"input_refs", "task_params"}, map[string]any{
+		ragToolDefinition("inspect_repo", "Build or reuse local repository indexes and return compressed code evidence for a question.", []string{"input_refs"}, map[string]any{
+			"query":                map[string]any{"type": "string"},
 			"input_refs":           inputRefsSchema(),
 			"retrieval_strategies": retrievalStrategiesSchema(),
 			"task_params":          map[string]any{"type": "object"},

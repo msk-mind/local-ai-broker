@@ -50,7 +50,7 @@ func TestInstallCodexProfile(t *testing.T) {
 	repo := t.TempDir()
 	codexHome := t.TempDir()
 	mustMkdirAll(t, filepath.Join(repo, "examples", "mcp-clients", "codex-profiles"))
-	mustWriteFile(t, filepath.Join(repo, "examples", "mcp-clients", "codex-profiles", "local-broker.config.toml.template"), "path=__REPO_ROOT__\n")
+	mustWriteFile(t, filepath.Join(repo, "examples", "mcp-clients", "codex-profiles", "local-broker.config.toml.template"), "developer_instructions = \"\"\"\nuse __REPO_ROOT__\n\"\"\"\npath=__REPO_ROOT__\n")
 	if err := installCodexProfile(repo, codexHome, "local-broker.config.toml.template", "local-broker.config.toml"); err != nil {
 		t.Fatalf("install profile: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestInstallCodexProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(content) != "path="+repo+"\n" {
+	if string(content) != "developer_instructions = \"\"\"\nuse "+repo+"\n\"\"\"\npath="+repo+"\n" {
 		t.Fatalf("unexpected rendered content: %q", string(content))
 	}
 }

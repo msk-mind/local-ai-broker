@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This project should evolve from "run a local LLM server on Slurm" into an open-source `local AI compute broker` that allows remote frontier models to delegate token-intensive work to on-premise compute.
+This project is an open-source `local AI compute broker` that allows remote frontier models to delegate token-intensive work to on-premise compute.
 
 The broker is not intended to replace remote models. It is intended to:
 
@@ -303,23 +303,6 @@ Default scheduling tiers:
 - `a100-reasoning`: hard reasoning, large-context compression, patch generation, and larger local models
 
 All tiers should run as ordinary scheduler jobs. GPUs should not be permanently reserved for the broker.
-
-## Relationship To Current Repository
-
-This repository already contains useful first-generation building blocks:
-
-- Slurm submission scripts
-- model configuration files
-- a lightweight registry for launched local model servers
-- operational documentation for Claude CLI and llama.cpp
-
-Those assets should be retained, but repositioned as:
-
-- the first execution backend bootstrap
-- model runtime templates
-- operational examples
-
-They should not remain the primary architectural boundary of the project. The architectural center should become the broker control plane and its job/result contracts.
 
 ## Recommended Initial Boundary
 

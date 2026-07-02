@@ -32,5 +32,7 @@ bash tests/e2e/run_smoke_suite.sh --with-loopback-bind
 
 Current unit coverage should also include:
 
-- Codex-to-llama.cpp compatibility catalog normalization
-- Codex-to-llama.cpp responses tool rewriting
+- broker HTTP handler behavior
+- MCP tool validation and dispatch
+- backend adapter behavior
+- cache and audit primitives

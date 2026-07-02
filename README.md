@@ -37,4 +37,4 @@ Key directories:
 - `examples/` MCP client integration examples
 - `tests/` smoke tests and e2e coverage
 
-This repo intentionally excludes the older direct llama.cpp and Ollama launcher workflow that remains in `ollama-slurm`.
+This repo is scoped to the broker control plane, worker runtimes, and client integration surface.

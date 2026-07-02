@@ -117,5 +117,5 @@ The `local-broker` profile targets the local command backend on the current mach
 
 ## Broker-First Scope
 
-This exported repo is focused on broker-mediated MCP and HTTP flows.
+This repo is focused on broker-mediated MCP and HTTP flows.
 Direct Codex-to-`llama.cpp` compatibility helpers are intentionally left in the original mixed-purpose repository.

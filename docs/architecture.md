@@ -1,323 +1,161 @@
-# Local AI Compute Broker Architecture
+# Local AI Broker Architecture
 
 ## Purpose
 
-This project is an open-source `local AI compute broker` that allows remote frontier models to delegate token-intensive work to on-premise compute.
+`local-ai-broker` lets an MCP-capable agent delegate token-heavy local work to on-prem compute while keeping the remote model as the orchestrator.
 
-The broker is not intended to replace remote models. It is intended to:
+Default flow:
 
-- reduce remote token consumption
-- keep sensitive data local by default
-- let remote agents orchestrate local analysis
-- reuse existing cluster infrastructure such as Slurm and OCI containers
+1. Remote agent submits a broker task.
+2. Broker validates request, policy, and budgets.
+3. Broker routes work to a backend such as Slurm or local command mode.
+4. Worker performs retrieval, compression, or analysis locally.
+5. Broker returns compact structured output plus evidence references.
 
-The default operating model is:
-
-1. A remote orchestrator model decides that a task is expensive or privacy-sensitive.
-2. It calls MCP tools exposed by the broker.
-3. The broker schedules local work on existing compute infrastructure.
-4. Local workers analyze large inputs and return structured JSON, evidence, and optional candidate fixes.
-5. The remote model receives only compact outputs unless the user explicitly authorizes raw data disclosure.
-
-## Design Principles
-
-- `Remote orchestration, local execution`: frontier models remain the orchestrator; on-premise systems do the heavy reading and analysis.
-- `RAG compression before remote synthesis`: local workers should return evidence-preserving compressed evidence packs, not raw data or generic summaries.
-- `Structured outputs over prose`: workers should emit JSON schemas whenever possible.
-- `Local-first privacy`: raw repositories, logs, documents, PHI, and proprietary data stay local unless explicitly exported.
-- `Standard interfaces`: prefer MCP, OpenAI-compatible inference APIs, Slurm, OCI containers, JSON Schema, and S3-compatible object stores.
-- `No permanently reserved GPUs`: all compute runs as ordinary scheduled jobs.
-- `Cache aggressively`: reuse expensive intermediate work using content-addressed hashes.
-- `Backend portability`: Slurm is first, not special. The broker should be able to route to Kubernetes, Ray, or standalone GPU hosts later.
+Raw repositories, logs, documents, and other sensitive inputs stay local unless explicitly released.
 
 ## System Context
 
 ```text
-Developer
+Developer / MCP-capable agent
   |
   v
-GitHub Copilot CLI / Claude Code / Codex CLI
+Broker MCP server or HTTP API
   |
-  v
-MCP Server: Local AI Compute Broker
-  |
-  +--> Policy Engine
-  +--> Router / Planner
-  +--> Cache / Artifact Store
-  +--> Backend Adapters
-          |
-          +--> Slurm
-          +--> Kubernetes
-          +--> Ray
-          +--> Standalone GPU servers
-                    |
-                    v
-              Worker Runtime
-                    |
-                    +--> llama.cpp
-                    +--> vLLM
-                    +--> SGLang
-                    +--> tree-sitter / rg / static analyzers
-                    +--> embedding models / summarizers / patch generators
+  +--> auth and policy
+  +--> job planning
+  +--> cache and artifact indexing
+  +--> backend adapter
+            |
+            +--> Slurm
+            +--> local command mode
+            +--> future backends
+                      |
+                      v
+                 local worker runtime
+                      |
+                      +--> retrieval tools
+                      +--> local model runtime
+                      +--> schema-validated result
 ```
 
-The primary northbound product is therefore:
+## Core Components
 
-```text
-Remote LLM orchestrator
-  -> MCP Broker
-  -> local discovery, chunking, retrieval, reranking, deduplication, compression
-  -> validated compressed evidence pack
-  -> remote final synthesis
-```
+### Broker API Surface
 
-Raw local inputs should not be sent back to the remote model by default.
+Implemented now:
 
-## Major Components
-
-### 1. MCP Broker
-
-Northbound interface for MCP-capable agents.
+- HTTP API for job submission, status, result fetch, log fetch, and cancel
+- stdio MCP server exposing broker tools
 
 Responsibilities:
 
-- expose stable MCP tools
-- validate and normalize requests
+- normalize requests
+- bind caller identity
 - enforce policy and token budgets
-- route requests to execution backends
-- provide job status and result retrieval
-- return structured summaries and artifact references
+- expose stable job lifecycle semantics
 
-### 2. Policy Engine
-
-Decision point for confidentiality and export control.
+### Planner And Policy Layer
 
 Responsibilities:
 
-- classify inputs and outputs
-- determine whether raw data can leave the local environment
-- enforce path-, repo-, user-, and model-level rules
-- require explicit override for sensitive data export
-- redact or block disallowed outputs
+- map `task_type` to worker behavior
+- select backend, tier, and runtime
+- keep remote release bounded to compact evidence-backed outputs
+- reject or redact disallowed outputs
 
-### 3. Router / Planner
+### Backend Adapter
 
-Task-to-execution translator.
+Implemented now:
 
-Responsibilities:
-
-- map `task_type` to execution templates
-- choose local models and runtime backends
-- prefer cheaper non-LLM tools first when possible
-- choose interactive vs background execution profiles
-- compute expected resource requirements
-- choose retrieval, reranking, compression, and GPU tier for RAG compression tasks
-
-### 4. RAG Compression Pipeline
-
-Local evidence reduction subsystem.
+- Slurm backend
+- local command backend
 
 Responsibilities:
 
-- discover broker-authorized inputs
-- chunk code, logs, documents, and git data with source references
-- build local indexes for lexical, structural, semantic, stack-trace, and git-history retrieval
-- retrieve, rerank, and deduplicate candidate chunks
-- compress evidence while preserving paths, line ranges, timestamps, commit hashes, artifact IDs, and content hashes
-- validate final evidence packs against schema and token budgets
-- keep raw repositories, logs, documents, PHI, and proprietary data local by default
+- submit runs
+- poll state
+- cancel runs
+- fetch backend logs and metadata
 
-Supported retrieval strategies:
+### Worker Runtime
 
-- ripgrep and BM25 for logs, identifiers, exact errors, and code
-- tree-sitter-aware chunking and symbol retrieval for code
-- embeddings for documents and semantic queries
-- stack-trace and path-aware retrieval for debugging
-- git diff and history-aware retrieval for regressions and patch review
+Workers execute against a staged run directory containing:
 
-### 5. Backend Adapter Layer
+- `job_spec.json`
+- `execution_plan.json`
+- `input_manifest.json`
 
-Execution abstraction that hides scheduler-specific details.
+Workers emit:
 
-Responsibilities:
+- `result.json`
+- `artifacts.json`
+- `heartbeat.json`
+- run metadata and worker logs
 
-- submit jobs
-- poll status
-- cancel jobs
-- fetch logs and terminal metadata
-- reconcile scheduler state with broker state
-
-Initial implementation:
-
-- `SlurmBackend`
-
-Planned implementations:
-
-- `KubernetesBackend`
-- `RayBackend`
-- `StandaloneGpuBackend`
-
-### 6. Worker Runtime
-
-Execution environment for local analysis tasks.
+### Cache And Artifact Layer
 
 Responsibilities:
 
-- read immutable job spec
-- mount or fetch staged inputs
-- run analysis, inference, or indexing tools
-- emit structured result JSON
-- persist artifacts and metrics
-- send heartbeats and progress updates
+- reuse exact job results where safe
+- reuse intermediate retrieval and compression artifacts
+- persist evidence packs and validation artifacts
+- keep cache keys content- and policy-aware
 
-Workers may run:
+## Current Task Model
 
-- `llama.cpp`
-- `vLLM`
-- `SGLang`
-- code search and parsing tools
-- embedding models
-- test/log/static-analysis pipelines
+The broker currently centers on structured local tasks rather than raw model serving:
 
-Routine RAG compression should prefer low-contention P40 GPUs when model inference is needed. A100 GPUs should be reserved for hard reasoning, large-context compression, patch generation, or other high-memory work.
-
-### 7. Metadata Store
-
-Control-plane source of truth.
-
-Responsibilities:
-
-- store jobs and execution plans
-- record policy decisions
-- maintain cache indexes
-- store model capability metadata
-- record audit events
-
-Suggested default:
-
-- PostgreSQL
-
-### 8. Artifact Store
-
-Blob storage for inputs, outputs, and intermediates.
-
-Responsibilities:
-
-- store logs, summaries, embeddings, patches, manifests
-- store structured result blobs
-- store intermediate parse/index outputs
-- support retention rules and access control
-
-Suggested default:
-
-- S3-compatible object storage
-- local filesystem abstraction for development
-
-## Execution Modes
-
-### Interactive
-
-Used for debugging, triage, and short investigations.
-
-Examples:
-
-- summarize a failing test log
-- search a repo for all callers of a symbol
-- extract top hypotheses from recent build output
-
-Properties:
-
-- lower latency target
-- smaller scopes
-- stronger preference for cache reuse
-- usually preemptible but short-lived
-
-### Background
-
-Used for broad investigations and long-running analysis.
-
-Examples:
-
-- summarize a large repository
-- batch-generate embeddings
-- run root-cause analysis across many logs
-- produce candidate fixes for a complex failure
-
-Properties:
-
-- longer runtime
-- broader scope
-- stronger batching support
-- designed for retries and preemption
-
-## Task Classes
-
-The first release should prioritize tasks that are expensive in tokens and naturally local:
-
-- `repo_summary`
-- `code_search`
-- `static_analysis`
-- `log_analysis`
-- `test_failure_analysis`
-- `root_cause_analysis`
 - `document_summary`
-- `embedding_generation`
-- `batch_extraction`
-- `patch_generation`
-- `rag_compression`
+- `log_analysis`
+- `repo_summary`
+- `rag_compress`
+- `debug_with_local_context`
+- `summarize_logs`
+- `inspect_repo`
+- `propose_patch`
 
-The broker should remain model-agnostic and task-agnostic by using schemas, execution templates, and backend adapters rather than hard-coded model flows.
+All tasks use the same job lifecycle and return schema-first JSON.
 
-## Data Flow
+## RAG Compression Position
 
-1. MCP client submits a job request.
-2. Broker normalizes the request into a canonical job spec.
-3. Policy engine evaluates access rules and export constraints.
-4. Cache layer checks for exact, retrieval, index, chunk, embedding, or evidence-pack reuse.
-5. Router selects execution profile, retrieval strategy, compression model, backend, and container.
-6. Broker stages immutable inputs and submits the job.
-7. Scheduler launches a worker.
-8. Worker performs input discovery, chunking, local indexing, retrieval, reranking, deduplication, and evidence-preserving compression.
-9. Worker emits a validated structured evidence pack or task-specific JSON result backed by evidence references.
-10. Broker validates outputs against schema, token budgets, and pre-release policy.
-11. Broker stores artifacts, updates cache indexes, and exposes only allowed compressed results.
-12. Remote orchestrator performs final synthesis from the evidence pack.
+RAG compression is the main token-reduction path.
 
-## RAG Compression Budgets
+Local workers should:
 
-The broker should enforce token budgets throughout the RAG pipeline:
+1. discover inputs
+2. chunk and index locally
+3. retrieve and rerank
+4. deduplicate
+5. compress into evidence packs with source references
+6. validate before release
 
-- retrieved chunk budget
-- per-chunk compression budget
-- final evidence-pack budget
-- remote model context budget
+The remote model should receive evidence packs, not raw corpora.
 
-Budget overruns should fail validation or trigger deterministic trimming before the remote model sees the result.
+## Execution Profiles
 
-## GPU Tiering
+Current practical tiers:
 
-Default scheduling tiers:
+- `cpu-rag-indexing`
+- `p40-rag-compression`
+- `a100-reasoning`
 
-- `cpu-rag-indexing`: discovery, hashing, chunking, ripgrep, BM25, tree-sitter parsing, and deduplication
-- `p40-rag-compression`: default low-contention tier for embeddings, reranking, and small local compression passes that fit 24 GB VRAM
-- `a100-reasoning`: hard reasoning, large-context compression, patch generation, and larger local models
+Expected behavior:
 
-All tiers should run as ordinary scheduler jobs. GPUs should not be permanently reserved for the broker.
+- CPU does discovery, chunking, hashing, and lexical retrieval
+- P40 is the default low-contention local compression tier
+- A100 is reserved for harder reasoning or larger local jobs
 
-## Recommended Initial Boundary
+GPUs are not reserved persistently. Work runs as ordinary scheduled jobs.
 
-The first product boundary should be:
+## Current Boundary
 
-- one MCP server
-- one backend adapter: Slurm
-- one artifact store abstraction
-- one metadata DB
-- a small number of worker task types
-- schema-first JSON outputs
+The current repository is scoped to:
 
-That is sufficient to prove the model:
+- broker control plane
+- worker contract
+- MCP and HTTP interfaces
+- Slurm and local execution backends
+- evidence-preserving local compression
 
-- remote agents orchestrate work
-- local cluster executes expensive analysis
-- raw sensitive inputs stay local
-- remote token usage drops materially
+Future backends or runtimes can extend this boundary without changing the northbound broker model.

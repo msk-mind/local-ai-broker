@@ -122,6 +122,7 @@ func (s *Service) SubmitJob(ctx context.Context, req types.SubmitJobRequest) (ty
 	if req.OutputSchema.Name == "" {
 		return types.SubmitJobResponse{}, errors.New("output_schema.name is required")
 	}
+	submitStartedAt := time.Now()
 	req.ExecutionProfile = s.applyExecutionProfileDefaults(req.ExecutionProfile)
 
 	taskParams := cloneTaskParams(req.TaskParams)
@@ -129,13 +130,19 @@ func (s *Service) SubmitJob(ctx context.Context, req types.SubmitJobRequest) (ty
 	taskParams["_broker_repo_root"] = s.repoRoot
 	req.TaskParams = taskParams
 
+	cacheKeyStartedAt := time.Now()
 	cacheKey, cacheable, err := cache.KeyForRequest(req)
+	cacheKeyDurationMS := durationMS(cacheKeyStartedAt)
 	if err != nil {
+		s.logger.Printf("submit failed task_type=%s stage=cache_key duration_ms=%d err=%v", req.TaskType, cacheKeyDurationMS, err)
 		return types.SubmitJobResponse{}, fmt.Errorf("compute cache key: %w", err)
 	}
 	if cacheable {
+		cacheLookupStartedAt := time.Now()
 		cachedJob, err := cache.FindCompletedJobByCacheKey(ctx, s.store, cacheKey)
+		cacheLookupDurationMS := durationMS(cacheLookupStartedAt)
 		if err != nil {
+			s.logger.Printf("submit failed task_type=%s stage=cache_lookup cache_key_ms=%d cache_lookup_ms=%d err=%v", req.TaskType, cacheKeyDurationMS, cacheLookupDurationMS, err)
 			return types.SubmitJobResponse{}, fmt.Errorf("lookup cache: %w", err)
 		}
 		if cachedJob != nil {
@@ -166,10 +173,15 @@ func (s *Service) SubmitJob(ctx context.Context, req types.SubmitJobRequest) (ty
 			if err := s.store.CreateJob(ctx, job); err != nil {
 				return types.SubmitJobResponse{}, fmt.Errorf("store cached job: %w", err)
 			}
-			s.logger.Printf("cache hit job=%s source_job=%s task_type=%s", job.ID, cachedJob.ID, job.TaskType)
+			totalDurationMS := durationMS(submitStartedAt)
+			s.logger.Printf("cache hit job=%s source_job=%s task_type=%s cache_key_ms=%d cache_lookup_ms=%d total_submit_ms=%d", job.ID, cachedJob.ID, job.TaskType, cacheKeyDurationMS, cacheLookupDurationMS, totalDurationMS)
 			s.audit(ctx, "job.submit", "success", &job, map[string]any{
-				"cache_status": "hit",
-				"backend_kind": job.BackendKind,
+				"cache_status":    "hit",
+				"backend_kind":    job.BackendKind,
+				"cache_key_ms":    cacheKeyDurationMS,
+				"cache_lookup_ms": cacheLookupDurationMS,
+				"total_submit_ms": totalDurationMS,
+				"cacheable":       cacheable,
 			})
 			return types.SubmitJobResponse{
 				JobID:     job.ID,
@@ -200,12 +212,18 @@ func (s *Service) SubmitJob(ctx context.Context, req types.SubmitJobRequest) (ty
 		Orchestration: orchestration,
 	}
 
+	stageBundleStartedAt := time.Now()
 	if err := s.stageExecutionBundle(ctx, job); err != nil {
+		s.logger.Printf("submit failed task_type=%s stage=stage_bundle cache_key_ms=%d stage_bundle_ms=%d err=%v", req.TaskType, cacheKeyDurationMS, durationMS(stageBundleStartedAt), err)
 		return types.SubmitJobResponse{}, fmt.Errorf("stage execution bundle: %w", err)
 	}
+	stageBundleDurationMS := durationMS(stageBundleStartedAt)
 
+	backendSubmitStartedAt := time.Now()
 	submitResp, err := s.backend.SubmitRun(ctx, job)
+	backendSubmitDurationMS := durationMS(backendSubmitStartedAt)
 	if err != nil {
+		s.logger.Printf("submit failed task_type=%s stage=backend_submit cache_key_ms=%d stage_bundle_ms=%d backend_submit_ms=%d err=%v", req.TaskType, cacheKeyDurationMS, stageBundleDurationMS, backendSubmitDurationMS, err)
 		return types.SubmitJobResponse{}, fmt.Errorf("submit backend run: %w", err)
 	}
 	job.State = submitResp.InitialState
@@ -216,10 +234,16 @@ func (s *Service) SubmitJob(ctx context.Context, req types.SubmitJobRequest) (ty
 		return types.SubmitJobResponse{}, fmt.Errorf("store job: %w", err)
 	}
 
-	s.logger.Printf("submitted job=%s task_type=%s backend_run_id=%s", job.ID, job.TaskType, job.BackendRunID)
+	totalDurationMS := durationMS(submitStartedAt)
+	s.logger.Printf("submitted job=%s task_type=%s backend_run_id=%s cache_key_ms=%d stage_bundle_ms=%d backend_submit_ms=%d total_submit_ms=%d", job.ID, job.TaskType, job.BackendRunID, cacheKeyDurationMS, stageBundleDurationMS, backendSubmitDurationMS, totalDurationMS)
 	s.audit(ctx, "job.submit", "success", &job, map[string]any{
-		"cache_status": job.CacheStatus,
-		"backend_kind": job.BackendKind,
+		"cache_status":      job.CacheStatus,
+		"backend_kind":      job.BackendKind,
+		"cache_key_ms":      cacheKeyDurationMS,
+		"stage_bundle_ms":   stageBundleDurationMS,
+		"backend_submit_ms": backendSubmitDurationMS,
+		"total_submit_ms":   totalDurationMS,
+		"cacheable":         cacheable,
 	})
 
 	return types.SubmitJobResponse{
@@ -228,6 +252,10 @@ func (s *Service) SubmitJob(ctx context.Context, req types.SubmitJobRequest) (ty
 		Cache:     types.CacheStatus{Status: job.CacheStatus},
 		StatusURL: "/v1/jobs/" + job.ID,
 	}, nil
+}
+
+func durationMS(start time.Time) int64 {
+	return time.Since(start).Milliseconds()
 }
 
 func (s *Service) SubmitParallelJobs(ctx context.Context, req types.SubmitParallelJobsRequest) (types.SubmitParallelJobsResponse, error) {

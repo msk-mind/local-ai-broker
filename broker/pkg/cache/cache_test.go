@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -87,6 +88,134 @@ func TestKeyForRequestDirectoryTasks(t *testing.T) {
 	}
 }
 
+func TestKeyForRequestDirectoryTasksUsesMetadataFingerprintForNonGitDirs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "broker", "main.go")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir broker dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+
+	req := types.SubmitJobRequest{
+		TaskType: "repo_summary",
+		InputRefs: []types.InputRef{
+			{Type: "directory", URI: "file://" + dir},
+		},
+		OutputSchema: types.OutputSchemaRef{Name: "repo_summary_v1"},
+	}
+
+	keyA, cacheable, err := KeyForRequest(req)
+	if err != nil {
+		t.Fatalf("key for request A: %v", err)
+	}
+	if !cacheable {
+		t.Fatal("expected repo_summary request to be cacheable")
+	}
+	if keyA == "" {
+		t.Fatal("expected non-empty key")
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	if err := os.WriteFile(path, []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("rewrite main.go: %v", err)
+	}
+
+	keyB, cacheable, err := KeyForRequest(req)
+	if err != nil {
+		t.Fatalf("key for request B: %v", err)
+	}
+	if !cacheable {
+		t.Fatal("expected repo_summary request to be cacheable")
+	}
+	if keyA == keyB {
+		t.Fatalf("expected metadata fingerprint cache key to change after file update, got %q", keyA)
+	}
+}
+
+func TestKeyForRequestDirectoryTasksBecomesUncacheableWhenFingerprintBudgetExceeded(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "broker", "main.go")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir broker dir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+
+	originalMaxEntries := metadataFingerprintMaxEntries
+	metadataFingerprintMaxEntries = 0
+	defer func() { metadataFingerprintMaxEntries = originalMaxEntries }()
+
+	key, cacheable, err := KeyForRequest(types.SubmitJobRequest{
+		TaskType: "repo_summary",
+		InputRefs: []types.InputRef{
+			{Type: "directory", URI: "file://" + dir},
+		},
+		OutputSchema: types.OutputSchemaRef{Name: "repo_summary_v1"},
+	})
+	if err != nil {
+		t.Fatalf("key for request: %v", err)
+	}
+	if cacheable {
+		t.Fatalf("expected repo_summary request to fall back to uncacheable, got key=%q", key)
+	}
+	if key != "" {
+		t.Fatalf("expected empty key when fingerprint budget is exceeded, got %q", key)
+	}
+}
+
+func TestKeyForRequestDirectoryTasksUsesGitFingerprintWhenAvailable(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+	runGitForTest(t, dir, "init")
+	runGitForTest(t, dir, "config", "user.email", "test@example.com")
+	runGitForTest(t, dir, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	runGitForTest(t, dir, "add", "main.go")
+	runGitForTest(t, dir, "commit", "-m", "init")
+
+	req := types.SubmitJobRequest{
+		TaskType: "repo_summary",
+		InputRefs: []types.InputRef{
+			{Type: "directory", URI: "file://" + dir},
+		},
+		OutputSchema: types.OutputSchemaRef{Name: "repo_summary_v1"},
+	}
+
+	keyA, cacheable, err := KeyForRequest(req)
+	if err != nil {
+		t.Fatalf("key for request A: %v", err)
+	}
+	if !cacheable {
+		t.Fatal("expected repo_summary request to be cacheable")
+	}
+	if keyA == "" {
+		t.Fatal("expected non-empty key")
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("rewrite main.go: %v", err)
+	}
+
+	keyB, cacheable, err := KeyForRequest(req)
+	if err != nil {
+		t.Fatalf("key for request B: %v", err)
+	}
+	if !cacheable {
+		t.Fatal("expected repo_summary request to be cacheable")
+	}
+	if keyA == keyB {
+		t.Fatalf("expected git fingerprint cache key to change for dirty repo, got %q", keyA)
+	}
+}
+
 func TestKeyForRequestChangesWhenExecutionProfileChanges(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "doc.txt")
@@ -148,5 +277,39 @@ func TestKeyForRequestInspectRepoIsNotCacheable(t *testing.T) {
 	}
 	if key != "" {
 		t.Fatalf("expected empty key for uncacheable inspect_repo, got %q", key)
+	}
+}
+
+func TestKeyForRequestDebugWithLocalContextIsNotCacheable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# demo\n"), 0o644); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+
+	key, cacheable, err := KeyForRequest(types.SubmitJobRequest{
+		TaskType: "debug_with_local_context",
+		InputRefs: []types.InputRef{
+			{Type: "repo", URI: "file://" + dir},
+		},
+		OutputSchema: types.OutputSchemaRef{Name: "debug_evidence_pack_v1"},
+	})
+	if err != nil {
+		t.Fatalf("key for request: %v", err)
+	}
+	if cacheable {
+		t.Fatalf("expected debug_with_local_context to be uncacheable, got key=%q", key)
+	}
+	if key != "" {
+		t.Fatalf("expected empty key for uncacheable debug_with_local_context, got %q", key)
+	}
+}
+
+func runGitForTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v: %s", args, err, string(output))
 	}
 }

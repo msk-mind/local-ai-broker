@@ -5,15 +5,25 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/msk-mind/local-ai-broker/broker/pkg/store"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/types"
+)
+
+var (
+	errFingerprintBudgetExceeded   = errors.New("directory fingerprint budget exceeded")
+	metadataFingerprintMaxEntries  = 20000
+	metadataFingerprintMaxDuration = 2 * time.Second
 )
 
 func KeyForRequest(req types.SubmitJobRequest) (string, bool, error) {
@@ -42,8 +52,11 @@ func KeyForRequest(req types.SubmitJobRequest) (string, bool, error) {
 		}
 		contentHash = sumBytes(data)
 	case "directory", "repo":
-		contentHash, err = hashDirectory(path)
+		contentHash, err = hashPath(path, input.Type)
 		if err != nil {
+			if errors.Is(err, errFingerprintBudgetExceeded) {
+				return "", false, nil
+			}
 			return "", false, nil
 		}
 	}
@@ -95,7 +108,7 @@ func FindCompletedJobByCacheKey(ctx context.Context, jobStore store.JobStore, ca
 
 func isCacheableTask(taskType string) bool {
 	switch taskType {
-	case "document_summary", "log_analysis", "repo_summary", "rag_compress", "summarize_logs", "debug_with_local_context":
+	case "document_summary", "log_analysis", "repo_summary", "rag_compress", "summarize_logs":
 		return true
 	default:
 		return false
@@ -137,8 +150,17 @@ func stableTaskParams(taskParams map[string]any) map[string]any {
 	return out
 }
 
-func hashDirectory(root string) (string, error) {
-	entries := make([]map[string]any, 0)
+func hashPath(path, inputType string) (string, error) {
+	if fingerprint, ok := gitFingerprint(path); ok {
+		return fingerprint, nil
+	}
+	return fingerprintDirectoryMetadata(path)
+}
+
+func fingerprintDirectoryMetadata(root string) (string, error) {
+	hasher := sha256.New()
+	startedAt := time.Now()
+	entryCount := 0
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -159,26 +181,102 @@ func hashDirectory(root string) (string, error) {
 			}
 			return nil
 		}
+		entryCount++
+		if entryCount > metadataFingerprintMaxEntries || time.Since(startedAt) > metadataFingerprintMaxDuration {
+			return errFingerprintBudgetExceeded
+		}
 
-		data, err := os.ReadFile(path)
+		info, err := d.Info()
 		if err != nil {
 			return err
 		}
-		entries = append(entries, map[string]any{
-			"path":         rel,
-			"content_hash": sumBytes(data),
-		})
+
+		if _, err := io.WriteString(hasher, rel); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(hasher, "\x00"); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(hasher, fmt.Sprintf("%d", info.Size())); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(hasher, "\x00"); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(hasher, fmt.Sprintf("%d", info.ModTime().UTC().UnixNano())); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(hasher, "\x00"); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
 		return "", err
 	}
+	return "meta:" + hex.EncodeToString(hasher.Sum(nil)), nil
+}
 
-	serialized, err := json.Marshal(entries)
+func gitFingerprint(path string) (string, bool) {
+	gitPath, err := exec.LookPath("git")
 	if err != nil {
-		return "", err
+		return "", false
 	}
-	return sumBytes(serialized), nil
+
+	topLevelRaw, err := runGit(gitPath, path, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", false
+	}
+	topLevel := strings.TrimSpace(topLevelRaw)
+	if topLevel == "" {
+		return "", false
+	}
+
+	head, err := runGit(gitPath, path, "rev-parse", "HEAD")
+	if err != nil {
+		head = ""
+	}
+	head = strings.TrimSpace(head)
+
+	relPath := "."
+	if rel, err := filepath.Rel(topLevel, path); err == nil && rel != "" {
+		relPath = filepath.ToSlash(rel)
+	}
+
+	statusArgs := []string{
+		"status",
+		"--porcelain=v1",
+		"--untracked-files=normal",
+	}
+	if relPath != "." {
+		statusArgs = append(statusArgs, "--", relPath)
+	}
+	status, err := runGit(gitPath, topLevel, statusArgs...)
+	if err != nil {
+		status = ""
+	}
+
+	payload := map[string]any{
+		"repo_root": topLevel,
+		"repo_head": head,
+		"scope":     relPath,
+		"status":    strings.TrimSpace(status),
+	}
+	serialized, err := json.Marshal(payload)
+	if err != nil {
+		return "", false
+	}
+	return "git:" + sumBytes(serialized), true
+}
+
+func runGit(gitPath, dir string, args ...string) (string, error) {
+	cmd := exec.Command(gitPath, args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+	return string(output), nil
 }
 
 func shouldIgnoreDir(rel string) bool {

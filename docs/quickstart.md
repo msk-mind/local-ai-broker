@@ -10,6 +10,22 @@ It is intentionally scoped to local validation:
 
 The fastest way to validate the current control plane is to use the fake-Slurm end-to-end smoke test first, then optionally run the broker server and MCP server directly.
 
+## Recommended Entry Point
+
+Use the bootstrap CLI for the common setup path:
+
+```bash
+go run ./cmd/local-ai-broker doctor
+go run ./cmd/local-ai-broker up --local
+go run ./cmd/local-ai-broker install codex --all
+```
+
+This gives you:
+
+- environment validation
+- broker startup with sensible defaults
+- Codex profile installation without editing config files manually
+
 ## Option 1: End-To-End Smoke Test
 
 This is the shortest path to confirm that the broker server, Slurm adapter, worker runtime, result ingestion, and broker CLI all work together.
@@ -51,10 +67,7 @@ export BROKER_AUDIT_VERIFY_MODE="warn"
 Start the server:
 
 ```bash
-env -u GOROOT \
-  GOCACHE=/tmp/local-ai-broker-gocache \
-  GOPATH=/tmp/local-ai-broker-gopath \
-  /usr/bin/go run ./broker/cmd/broker-server
+go run ./cmd/local-ai-broker up --local
 ```
 
 Check health:
@@ -68,7 +81,12 @@ If you want to validate the Slurm adapter without a real cluster, use `tests/e2e
 For opt-in Codex setup without changing your default global MCP configuration:
 
 ```bash
-examples/mcp-clients/install_codex_profiles.sh
+go run ./cmd/local-ai-broker install codex --all
+```
+
+Then use:
+
+```bash
 codex -p slurm-broker
 codex -p local-broker
 ```
@@ -111,10 +129,7 @@ set -a
 source /tmp/local-ai-broker-broker.env
 set +a
 
-env -u GOROOT \
-  GOCACHE=/tmp/local-ai-broker-gocache \
-  GOPATH=/tmp/local-ai-broker-gopath \
-  /usr/bin/go run ./broker/cmd/broker-server
+go run ./cmd/local-ai-broker up --slurm --env-file /tmp/local-ai-broker-broker.env
 ```
 
 With that profile:

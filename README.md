@@ -12,6 +12,7 @@ Primary flow:
 
 Current implementation includes:
 
+- unified `local-ai-broker` bootstrap CLI for doctor, startup, and Codex profile install
 - broker HTTP server
 - stdio MCP server
 - Slurm backend adapter
@@ -22,6 +23,9 @@ Current implementation includes:
 
 Start here:
 
+- `go run ./cmd/local-ai-broker doctor`
+- `go run ./cmd/local-ai-broker up --local`
+- `go run ./cmd/local-ai-broker install codex --all`
 - [docs/README.md](docs/README.md)
 - [docs/quickstart.md](docs/quickstart.md)
 - [docs/mcp-tools.md](docs/mcp-tools.md)

@@ -180,7 +180,7 @@ func runInit(args []string) error {
 	localMode := fs.Bool("local", false, "generate a local backend config")
 	slurmMode := fs.Bool("slurm", false, "generate a Slurm backend config")
 	outputPath := fs.String("output", "", "config output path")
-	listenAddr := fs.String("listen-addr", "127.0.0.1:8081", "broker listen address")
+	listenAddr := fs.String("listen-addr", "auto", "broker listen address or auto")
 	authMode := fs.String("auth-mode", "header", "broker auth mode")
 	localScript := fs.String("local-script", "", "local worker script path")
 	slurmScript := fs.String("slurm-script", "", "Slurm worker script path")
@@ -203,6 +203,13 @@ func runInit(args []string) error {
 		return err
 	}
 	mode := selectMode(*localMode, *slurmMode, "local")
+	resolvedListenAddr := strings.TrimSpace(*listenAddr)
+	if resolvedListenAddr == "" || strings.EqualFold(resolvedListenAddr, "auto") {
+		resolvedListenAddr, err = pickFreeLoopbackAddr()
+		if err != nil {
+			return err
+		}
+	}
 	if *outputPath == "" {
 		if mode == "slurm" {
 			*outputPath = filepath.Join(repoRoot, "configs", "broker", "generated.slurm.json")
@@ -211,7 +218,7 @@ func runInit(args []string) error {
 		}
 	}
 	cfg := bootstrapConfig{
-		ListenAddr:      *listenAddr,
+		ListenAddr:      resolvedListenAddr,
 		JobStorePath:    "__REPO_ROOT__/.broker/jobs.json",
 		RunRootPath:     "__REPO_ROOT__/.broker/runs",
 		RepoRootPath:    "__REPO_ROOT__",

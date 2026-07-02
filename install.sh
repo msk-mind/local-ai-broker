@@ -74,8 +74,19 @@ if [[ -z "${GO_BIN}" ]]; then
   exit 1
 fi
 
+pick_free_loopback_addr() {
+  python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(f"127.0.0.1:{sock.getsockname()[1]}")
+PY
+}
+
 export GOCACHE="${GOCACHE:-/tmp/local-ai-broker-gocache}"
 export GOPATH="${GOPATH:-/tmp/local-ai-broker-gopath}"
+LISTEN_ADDR="$(pick_free_loopback_addr)"
 
 run_cli() {
   (
@@ -95,9 +106,21 @@ if [[ "${MODE}" == "slurm" ]]; then
   echo "==> writing CDSI Slurm config at ${CONFIG_OUTPUT}"
   mkdir -p "$(dirname "${CONFIG_OUTPUT}")"
   cp "${REPO_ROOT}/configs/broker/cdsi-cluster.example.json" "${CONFIG_OUTPUT}"
+  python3 - "${CONFIG_OUTPUT}" "${LISTEN_ADDR}" <<'PY'
+import json
+import sys
+
+path, listen_addr = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as fh:
+    payload = json.load(fh)
+payload["listen_addr"] = listen_addr
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(payload, fh, indent=2)
+    fh.write("\n")
+PY
 else
   echo "==> generating ${MODE} config at ${CONFIG_OUTPUT}"
-  run_cli init "--${MODE}" --output "${CONFIG_OUTPUT}"
+  run_cli init "--${MODE}" --listen-addr "${LISTEN_ADDR}" --output "${CONFIG_OUTPUT}"
 fi
 
 if [[ "${SKIP_DOCTOR}" -eq 0 ]]; then
@@ -120,4 +143,7 @@ Add to PATH if needed:
 Next:
   ${BIN_DIR}/local-ai-broker up --config ${CONFIG_OUTPUT}
   ${BIN_DIR}/local-ai-broker demo --config ${CONFIG_OUTPUT}
+
+Configured listen address:
+  ${LISTEN_ADDR}
 EOF

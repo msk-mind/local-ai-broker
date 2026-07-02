@@ -100,7 +100,9 @@ If your cluster has lightly used P40 nodes and more constrained A100 nodes, star
 ./install.sh --slurm --config-output /tmp/local-ai-broker.json
 ```
 
-For the CDSI cluster specifically, start from:
+On CDSI, that installer path already writes the checked-in CDSI profile by default.
+
+If you want to copy the profile manually instead, use:
 
 ```bash
 cp configs/broker/cdsi-cluster.example.json /tmp/local-ai-broker.json

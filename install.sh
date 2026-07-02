@@ -62,7 +62,7 @@ done
 
 if [[ -z "${CONFIG_OUTPUT}" ]]; then
   if [[ "${MODE}" == "slurm" ]]; then
-    CONFIG_OUTPUT="${REPO_ROOT}/configs/broker/generated.slurm.json"
+    CONFIG_OUTPUT="${REPO_ROOT}/configs/broker/generated.cdsi-slurm.json"
   else
     CONFIG_OUTPUT="${REPO_ROOT}/configs/broker/generated.local.json"
   fi
@@ -91,8 +91,14 @@ run_cli() {
 echo "==> installing binaries into ${BIN_DIR}"
 run_cli install binaries --bin-dir "${BIN_DIR}"
 
-echo "==> generating ${MODE} config at ${CONFIG_OUTPUT}"
-run_cli init "--${MODE}" --output "${CONFIG_OUTPUT}"
+if [[ "${MODE}" == "slurm" ]]; then
+  echo "==> writing CDSI Slurm config at ${CONFIG_OUTPUT}"
+  mkdir -p "$(dirname "${CONFIG_OUTPUT}")"
+  cp "${REPO_ROOT}/configs/broker/cdsi-cluster.example.json" "${CONFIG_OUTPUT}"
+else
+  echo "==> generating ${MODE} config at ${CONFIG_OUTPUT}"
+  run_cli init "--${MODE}" --output "${CONFIG_OUTPUT}"
+fi
 
 if [[ "${SKIP_DOCTOR}" -eq 0 ]]; then
   echo "==> running doctor"

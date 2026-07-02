@@ -16,9 +16,11 @@ Representative examples for this area would include:
 - single-node file-backed config
 - first production-like Slurm deployment config
 
-Current example:
+Current examples:
 
-- `slurm-p40-a100.env.example`: broker environment for a cluster where P40 nodes are the default RAG compression tier and A100 nodes are escalation-only reasoning capacity
+- `local.example.json`: local command-mode development config
+- `slurm-p40-a100.example.json`: Slurm-backed config for a cluster where P40 nodes are the default RAG compression tier and A100 nodes are escalation-only reasoning capacity
+- `slurm-p40-a100.env.example`: environment-variable equivalent for shells or existing automation
 
 This example is intentionally simple:
 
@@ -26,7 +28,7 @@ This example is intentionally simple:
 - `p40-rag-compression` maps to `BROKER_SLURM_PARTITION_P40`
 - `a100-reasoning` maps to `BROKER_SLURM_PARTITION_A100`
 
-The broker already maps retry recommendations onto those tier names. The env file closes the loop by giving each tier a concrete Slurm partition.
+The broker already maps retry recommendations onto those tier names. The config files close the loop by giving each tier a concrete backend placement.
 
 Optional tier-locality controls are also supported:
 

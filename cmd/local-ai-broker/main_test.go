@@ -62,6 +62,42 @@ func TestInstallCodexProfile(t *testing.T) {
 	}
 }
 
+func TestLoadBootstrapConfig(t *testing.T) {
+	repo := t.TempDir()
+	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "local.json")
+	content := `{
+  "listen_addr": "127.0.0.1:18081",
+  "job_store_path": "__REPO_ROOT__/.broker/jobs.json",
+  "backend": "local",
+  "local": {
+    "script_path": "__REPO_ROOT__/deploy/local/broker_worker.sh"
+  },
+  "runtime": {
+    "llama_cpp_timeout_seconds": 7
+  }
+}`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	values, err := loadBootstrapConfig(repo, configPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if values["BROKER_BACKEND"] != "local" {
+		t.Fatalf("unexpected backend: %#v", values)
+	}
+	if values["BROKER_JOB_STORE_PATH"] != filepath.Join(repo, ".broker", "jobs.json") {
+		t.Fatalf("unexpected job store path: %#v", values)
+	}
+	if values["BROKER_LOCAL_SCRIPT_PATH"] != filepath.Join(repo, "deploy", "local", "broker_worker.sh") {
+		t.Fatalf("unexpected local script path: %#v", values)
+	}
+	if values["BROKER_RUNTIME_LLAMACPP_TIMEOUT_SECONDS"] != "7" {
+		t.Fatalf("unexpected timeout value: %#v", values)
+	}
+}
+
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {

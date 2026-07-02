@@ -1,0 +1,14 @@
+{
+  "listen_addr": "127.0.0.1:8081",
+  "job_store_path": "__REPO_ROOT__/.broker/jobs.json",
+  "run_root_path": "__REPO_ROOT__/.broker/runs",
+  "repo_root_path": "__REPO_ROOT__",
+  "audit_log_path": "__REPO_ROOT__/.broker/audit.jsonl",
+  "audit_verify_mode": "warn",
+  "auth_mode": "header",
+  "backend": "local",
+  "local": {
+    "mode": "command",
+    "script_path": "__REPO_ROOT__/deploy/local/broker_worker.sh"
+  }
+}

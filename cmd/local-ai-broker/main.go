@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -56,9 +57,9 @@ func printRootUsage() {
 	fmt.Print(`local-ai-broker
 
 Usage:
-  local-ai-broker doctor [--local|--slurm]
+  local-ai-broker doctor [--local|--slurm] [--config PATH]
   local-ai-broker install codex [--local|--slurm|--all] [--codex-home PATH]
-  local-ai-broker up [--local|--slurm] [--listen-addr ADDR] [--env-file PATH]
+  local-ai-broker up [--local|--slurm] [--listen-addr ADDR] [--config PATH] [--env-file PATH]
 `)
 }
 
@@ -67,13 +68,30 @@ func runDoctor(args []string) error {
 	fs.SetOutput(os.Stderr)
 	localMode := fs.Bool("local", false, "check local backend requirements")
 	slurmMode := fs.Bool("slurm", false, "check Slurm backend requirements")
+	configPath := fs.String("config", "", "optional broker config JSON file")
 	if err := fs.Parse(args); err != nil {
 		return commandError{message: err.Error(), code: 2}
 	}
-	mode := selectMode(*localMode, *slurmMode, "local")
 	repoRoot, err := findRepoRoot()
 	if err != nil {
 		return err
+	}
+	mode := selectMode(*localMode, *slurmMode, "local")
+	envMap := defaultBrokerEnv(repoRoot, mode)
+	if *configPath != "" {
+		loaded, err := loadBootstrapConfig(repoRoot, *configPath)
+		if err != nil {
+			return err
+		}
+		for k, v := range loaded {
+			envMap[k] = v
+		}
+		if backend := envMap["BROKER_BACKEND"]; backend == "slurm" {
+			mode = "slurm"
+		} else if backend == "local" {
+			mode = "local"
+		}
+		reportCheck("config", *configPath, true)
 	}
 	failures := 0
 	warnings := 0
@@ -95,7 +113,11 @@ func runDoctor(args []string) error {
 		if !checkExecutable("python3", true) {
 			failures++
 		}
-		if !checkPath(filepath.Join(repoRoot, "deploy", "local", "broker_worker.sh"), true) {
+		localWorker := envMap["BROKER_LOCAL_SCRIPT_PATH"]
+		if localWorker == "" {
+			localWorker = filepath.Join(repoRoot, "deploy", "local", "broker_worker.sh")
+		}
+		if !checkPath(localWorker, true) {
 			failures++
 		}
 	}
@@ -105,7 +127,11 @@ func runDoctor(args []string) error {
 				failures++
 			}
 		}
-		if !checkPath(filepath.Join(repoRoot, "deploy", "slurm", "broker_worker.slurm"), true) {
+		slurmScript := envMap["BROKER_SLURM_SCRIPT_PATH"]
+		if slurmScript == "" {
+			slurmScript = filepath.Join(repoRoot, "deploy", "slurm", "broker_worker.slurm")
+		}
+		if !checkPath(slurmScript, true) {
 			failures++
 		}
 	}
@@ -191,6 +217,7 @@ func runUp(args []string) error {
 	localMode := fs.Bool("local", false, "start broker server in local backend mode")
 	slurmMode := fs.Bool("slurm", false, "start broker server in Slurm backend mode")
 	listenAddr := fs.String("listen-addr", "", "override BROKER_LISTEN_ADDR")
+	configPath := fs.String("config", "", "optional broker config JSON file")
 	envFile := fs.String("env-file", "", "optional env file with KEY=VALUE lines")
 	if err := fs.Parse(args); err != nil {
 		return commandError{message: err.Error(), code: 2}
@@ -201,6 +228,20 @@ func runUp(args []string) error {
 		return err
 	}
 	envMap := defaultBrokerEnv(repoRoot, mode)
+	if *configPath != "" {
+		loaded, err := loadBootstrapConfig(repoRoot, *configPath)
+		if err != nil {
+			return err
+		}
+		for k, v := range loaded {
+			envMap[k] = v
+		}
+		if backend := envMap["BROKER_BACKEND"]; backend == "slurm" {
+			mode = "slurm"
+		} else if backend == "local" {
+			mode = "local"
+		}
+	}
 	if *envFile != "" {
 		loaded, err := parseEnvFile(*envFile)
 		if err != nil {
@@ -231,6 +272,64 @@ func runUp(args []string) error {
 	cmd.Env = mergeEnv(envMap)
 	fmt.Printf("starting broker-server in %s mode from %s\n", mode, repoRoot)
 	return cmd.Run()
+}
+
+type bootstrapConfig struct {
+	ListenAddr      string                 `json:"listen_addr"`
+	JobStorePath    string                 `json:"job_store_path"`
+	RunRootPath     string                 `json:"run_root_path"`
+	RepoRootPath    string                 `json:"repo_root_path"`
+	AuditLogPath    string                 `json:"audit_log_path"`
+	AuditVerifyMode string                 `json:"audit_verify_mode"`
+	AuthMode        string                 `json:"auth_mode"`
+	MCPActor        string                 `json:"mcp_actor"`
+	MCPRole         string                 `json:"mcp_role"`
+	Backend         string                 `json:"backend"`
+	Local           localBootstrapConfig   `json:"local"`
+	Slurm           slurmBootstrapConfig   `json:"slurm"`
+	Runtime         runtimeBootstrapConfig `json:"runtime"`
+	Parallel        parallelBootstrapConfig `json:"parallel"`
+}
+
+type localBootstrapConfig struct {
+	Mode       string `json:"mode"`
+	ScriptPath string `json:"script_path"`
+}
+
+type slurmBootstrapConfig struct {
+	Mode           string `json:"mode"`
+	SubmitCmd      string `json:"submit_cmd"`
+	StatusCmd      string `json:"status_cmd"`
+	CancelCmd      string `json:"cancel_cmd"`
+	ScriptPath     string `json:"script_path"`
+	PartitionCPU   string `json:"partition_cpu"`
+	PartitionP40   string `json:"partition_p40"`
+	PartitionA100  string `json:"partition_a100"`
+	NodeListCPU    string `json:"nodelist_cpu"`
+	NodeListP40    string `json:"nodelist_p40"`
+	NodeListA100   string `json:"nodelist_a100"`
+	ConstraintCPU  string `json:"constraint_cpu"`
+	ConstraintP40  string `json:"constraint_p40"`
+	ConstraintA100 string `json:"constraint_a100"`
+	ModelCPU       string `json:"model_profile_cpu"`
+	ModelP40       string `json:"model_profile_p40"`
+	ModelA100      string `json:"model_profile_a100"`
+}
+
+type runtimeBootstrapConfig struct {
+	LlamaCPPBaseURL        string `json:"llama_cpp_base_url"`
+	LlamaCPPTimeoutSeconds int    `json:"llama_cpp_timeout_seconds"`
+	VLLMBaseURL            string `json:"vllm_base_url"`
+	VLLMTimeoutSeconds     int    `json:"vllm_timeout_seconds"`
+	SGLangBaseURL          string `json:"sglang_base_url"`
+	SGLangTimeoutSeconds   int    `json:"sglang_timeout_seconds"`
+}
+
+type parallelBootstrapConfig struct {
+	MaxBatchSize           int `json:"max_batch_size"`
+	MaxActiveBatches       int `json:"max_active_batches"`
+	MaxAdditionalBatches   int `json:"max_additional_batches"`
+	MaxRetriedShards       int `json:"max_retried_shards"`
 }
 
 func findRepoRoot() (string, error) {
@@ -274,6 +373,90 @@ func looksLikeRepoRoot(path string) bool {
 		}
 	}
 	return true
+}
+
+func loadBootstrapConfig(repoRoot, path string) (map[string]string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var cfg bootstrapConfig
+	if err := json.Unmarshal(content, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config JSON: %w", err)
+	}
+	configDir := filepath.Dir(path)
+	envMap := map[string]string{}
+	set := func(key, value string, pathLike bool) {
+		if value == "" {
+			return
+		}
+		if pathLike {
+			value = resolveConfigPath(repoRoot, configDir, value)
+		}
+		envMap[key] = value
+	}
+	set("BROKER_LISTEN_ADDR", cfg.ListenAddr, false)
+	set("BROKER_JOB_STORE_PATH", cfg.JobStorePath, true)
+	set("BROKER_RUN_ROOT_PATH", cfg.RunRootPath, true)
+	set("BROKER_REPO_ROOT_PATH", cfg.RepoRootPath, true)
+	set("BROKER_AUDIT_LOG_PATH", cfg.AuditLogPath, true)
+	set("BROKER_AUDIT_VERIFY_MODE", cfg.AuditVerifyMode, false)
+	set("BROKER_AUTH_MODE", cfg.AuthMode, false)
+	set("BROKER_MCP_ACTOR", cfg.MCPActor, false)
+	set("BROKER_MCP_ROLE", cfg.MCPRole, false)
+	set("BROKER_BACKEND", cfg.Backend, false)
+	set("BROKER_LOCAL_MODE", cfg.Local.Mode, false)
+	set("BROKER_LOCAL_SCRIPT_PATH", cfg.Local.ScriptPath, true)
+	set("BROKER_SLURM_MODE", cfg.Slurm.Mode, false)
+	set("BROKER_SLURM_SUBMIT_CMD", cfg.Slurm.SubmitCmd, false)
+	set("BROKER_SLURM_STATUS_CMD", cfg.Slurm.StatusCmd, false)
+	set("BROKER_SLURM_CANCEL_CMD", cfg.Slurm.CancelCmd, false)
+	set("BROKER_SLURM_SCRIPT_PATH", cfg.Slurm.ScriptPath, true)
+	set("BROKER_SLURM_PARTITION_CPU", cfg.Slurm.PartitionCPU, false)
+	set("BROKER_SLURM_PARTITION_P40", cfg.Slurm.PartitionP40, false)
+	set("BROKER_SLURM_PARTITION_A100", cfg.Slurm.PartitionA100, false)
+	set("BROKER_SLURM_NODELIST_CPU", cfg.Slurm.NodeListCPU, false)
+	set("BROKER_SLURM_NODELIST_P40", cfg.Slurm.NodeListP40, false)
+	set("BROKER_SLURM_NODELIST_A100", cfg.Slurm.NodeListA100, false)
+	set("BROKER_SLURM_CONSTRAINT_CPU", cfg.Slurm.ConstraintCPU, false)
+	set("BROKER_SLURM_CONSTRAINT_P40", cfg.Slurm.ConstraintP40, false)
+	set("BROKER_SLURM_CONSTRAINT_A100", cfg.Slurm.ConstraintA100, false)
+	set("BROKER_MODEL_PROFILE_CPU", cfg.Slurm.ModelCPU, false)
+	set("BROKER_MODEL_PROFILE_P40", cfg.Slurm.ModelP40, false)
+	set("BROKER_MODEL_PROFILE_A100", cfg.Slurm.ModelA100, false)
+	set("BROKER_RUNTIME_LLAMACPP_BASE_URL", cfg.Runtime.LlamaCPPBaseURL, false)
+	set("BROKER_RUNTIME_VLLM_BASE_URL", cfg.Runtime.VLLMBaseURL, false)
+	set("BROKER_RUNTIME_SGLANG_BASE_URL", cfg.Runtime.SGLangBaseURL, false)
+	if cfg.Runtime.LlamaCPPTimeoutSeconds > 0 {
+		envMap["BROKER_RUNTIME_LLAMACPP_TIMEOUT_SECONDS"] = fmt.Sprintf("%d", cfg.Runtime.LlamaCPPTimeoutSeconds)
+	}
+	if cfg.Runtime.VLLMTimeoutSeconds > 0 {
+		envMap["BROKER_RUNTIME_VLLM_TIMEOUT_SECONDS"] = fmt.Sprintf("%d", cfg.Runtime.VLLMTimeoutSeconds)
+	}
+	if cfg.Runtime.SGLangTimeoutSeconds > 0 {
+		envMap["BROKER_RUNTIME_SGLANG_TIMEOUT_SECONDS"] = fmt.Sprintf("%d", cfg.Runtime.SGLangTimeoutSeconds)
+	}
+	if cfg.Parallel.MaxBatchSize > 0 {
+		envMap["BROKER_PARALLEL_MAX_BATCH_SIZE"] = fmt.Sprintf("%d", cfg.Parallel.MaxBatchSize)
+	}
+	if cfg.Parallel.MaxActiveBatches > 0 {
+		envMap["BROKER_PARALLEL_MAX_ACTIVE_BATCHES"] = fmt.Sprintf("%d", cfg.Parallel.MaxActiveBatches)
+	}
+	if cfg.Parallel.MaxAdditionalBatches > 0 {
+		envMap["BROKER_ROOT_ACTION_MAX_ADDITIONAL_BATCHES"] = fmt.Sprintf("%d", cfg.Parallel.MaxAdditionalBatches)
+	}
+	if cfg.Parallel.MaxRetriedShards > 0 {
+		envMap["BROKER_ROOT_ACTION_MAX_RETRIED_SHARDS"] = fmt.Sprintf("%d", cfg.Parallel.MaxRetriedShards)
+	}
+	return envMap, nil
+}
+
+func resolveConfigPath(repoRoot, configDir, value string) string {
+	value = strings.ReplaceAll(value, "__REPO_ROOT__", repoRoot)
+	if filepath.IsAbs(value) {
+		return value
+	}
+	return filepath.Clean(filepath.Join(configDir, value))
 }
 
 func defaultBrokerEnv(repoRoot, mode string) map[string]string {

@@ -15,8 +15,8 @@ The fastest way to validate the current control plane is to use the fake-Slurm e
 Use the bootstrap CLI for the common setup path:
 
 ```bash
-go run ./cmd/local-ai-broker doctor
-go run ./cmd/local-ai-broker up --local
+go run ./cmd/local-ai-broker doctor --config configs/broker/local.example.json
+go run ./cmd/local-ai-broker up --config configs/broker/local.example.json
 go run ./cmd/local-ai-broker install codex --all
 ```
 
@@ -50,24 +50,16 @@ If this succeeds, the local broker control plane is functioning.
 
 This mode is useful when you want to inspect the HTTP API directly.
 
-Recommended local environment for direct execution on this machine or a MacBook:
+Recommended local config on this machine or a MacBook:
 
 ```bash
-export BROKER_LISTEN_ADDR="127.0.0.1:8081"
-export BROKER_JOB_STORE_PATH=".broker/jobs.json"
-export BROKER_RUN_ROOT_PATH=".broker/runs"
-export BROKER_REPO_ROOT_PATH="$PWD"
-export BROKER_BACKEND="local"
-export BROKER_LOCAL_MODE="command"
-export BROKER_LOCAL_SCRIPT_PATH="$PWD/deploy/local/broker_worker.sh"
-export BROKER_AUDIT_LOG_PATH=".broker/audit.jsonl"
-export BROKER_AUDIT_VERIFY_MODE="warn"
+configs/broker/local.example.json
 ```
 
 Start the server:
 
 ```bash
-go run ./cmd/local-ai-broker up --local
+go run ./cmd/local-ai-broker up --config configs/broker/local.example.json
 ```
 
 Check health:
@@ -98,38 +90,34 @@ The generated profiles keep broker MCP wiring session-scoped, so a normal `codex
 If your cluster has lightly used P40 nodes and more constrained A100 nodes, start from:
 
 ```bash
-cp configs/broker/slurm-p40-a100.env.example /tmp/local-ai-broker-broker.env
+cp configs/broker/slurm-p40-a100.example.json /tmp/local-ai-broker.json
 ```
 
 Then edit the partition names if your site uses different labels:
 
-- `BROKER_SLURM_PARTITION_CPU`
-- `BROKER_SLURM_PARTITION_P40`
-- `BROKER_SLURM_PARTITION_A100`
+- `slurm.partition_cpu`
+- `slurm.partition_p40`
+- `slurm.partition_a100`
 
 If you want the P40 tier to prefer a specific node pool directly, also set:
 
-- `BROKER_SLURM_NODELIST_P40=pllimsksparky[1-4]`
-- optionally `BROKER_SLURM_CONSTRAINT_P40=p40`
+- `slurm.nodelist_p40`
+- optionally `slurm.constraint_p40`
 
 For automatic tier-local model selection, set:
 
-- `BROKER_MODEL_PROFILE_P40=gpt-oss-20b.p40`
-- `BROKER_MODEL_PROFILE_A100=qwen3-coder-30b.a100`
+- `slurm.model_profile_p40`
+- `slurm.model_profile_a100`
 
 For live local `llama.cpp` reranking/compression instead of deterministic fallback, also set:
 
-- `BROKER_RUNTIME_LLAMACPP_BASE_URL=http://127.0.0.1:8080`
-- optionally `BROKER_RUNTIME_LLAMACPP_TIMEOUT_SECONDS=20`
+- `runtime.llama_cpp_base_url`
+- optionally `runtime.llama_cpp_timeout_seconds`
 
-Load it and start the server:
+Start the server:
 
 ```bash
-set -a
-source /tmp/local-ai-broker-broker.env
-set +a
-
-go run ./cmd/local-ai-broker up --slurm --env-file /tmp/local-ai-broker-broker.env
+go run ./cmd/local-ai-broker up --config /tmp/local-ai-broker.json
 ```
 
 With that profile:

@@ -147,7 +147,7 @@ func runDemo(args []string) error {
 		return err
 	}
 
-	cmd, err := startBrokerServerProcess(repoRoot, envMap)
+	cmd, stderrBuf, err := startBrokerServerProcess(repoRoot, envMap)
 	if err != nil {
 		return err
 	}
@@ -155,6 +155,9 @@ func runDemo(args []string) error {
 
 	baseURL := "http://" + listenAddr
 	if err := waitForHealthz(baseURL, 10*time.Second); err != nil {
+		if stderrText := strings.TrimSpace(stderrBuf.String()); stderrText != "" {
+			return fmt.Errorf("%w: %s", err, stderrText)
+		}
 		return err
 	}
 
@@ -737,20 +740,21 @@ func writeBootstrapConfig(path string, cfg bootstrapConfig) error {
 	return os.WriteFile(path, content, 0o644)
 }
 
-func startBrokerServerProcess(repoRoot string, envMap map[string]string) (*exec.Cmd, error) {
+func startBrokerServerProcess(repoRoot string, envMap map[string]string) (*exec.Cmd, *bytes.Buffer, error) {
 	goBin, err := exec.LookPath("go")
 	if err != nil {
-		return nil, commandError{message: "missing required executable: go", code: 1}
+		return nil, nil, commandError{message: "missing required executable: go", code: 1}
 	}
 	cmd := exec.Command(goBin, "run", "./broker/cmd/broker-server")
 	cmd.Dir = repoRoot
 	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	stderrBuf := &bytes.Buffer{}
+	cmd.Stderr = stderrBuf
 	cmd.Env = mergeEnv(envMap)
 	if err := cmd.Start(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return cmd, nil
+	return cmd, stderrBuf, nil
 }
 
 func stopProcess(cmd *exec.Cmd) {
@@ -900,6 +904,7 @@ func defaultBrokerEnv(repoRoot, mode string) map[string]string {
 		"GOENV":                    "off",
 		"GOCACHE":                  envOr("GOCACHE", "/tmp/local-ai-broker-gocache"),
 		"GOPATH":                   envOr("GOPATH", "/tmp/local-ai-broker-gopath"),
+		"CGO_ENABLED":              "0",
 		"BROKER_LISTEN_ADDR":       envOr("BROKER_LISTEN_ADDR", "127.0.0.1:8081"),
 		"BROKER_JOB_STORE_PATH":    envOr("BROKER_JOB_STORE_PATH", filepath.Join(repoRoot, ".broker", "jobs.json")),
 		"BROKER_RUN_ROOT_PATH":     envOr("BROKER_RUN_ROOT_PATH", filepath.Join(repoRoot, ".broker", "runs")),

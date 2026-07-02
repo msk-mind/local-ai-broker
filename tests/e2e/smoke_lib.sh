@@ -16,6 +16,16 @@ wait_for_http_ok() {
   return 1
 }
 
+pick_free_loopback_addr() {
+  python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(f"127.0.0.1:{sock.getsockname()[1]}")
+PY
+}
+
 kill_pid_if_running() {
   local pid="${1:-}"
   if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then

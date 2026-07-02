@@ -14,6 +14,7 @@ Current implementation includes:
 
 - unified `local-ai-broker` bootstrap CLI for doctor, startup, and Codex profile install
 - binary installer for `local-ai-broker`, `broker-server`, `broker-mcp`, and `broker-cli`
+- version metadata in the bootstrap CLI and a release bundle builder under `scripts/build_release.sh`
 - broker HTTP server
 - stdio MCP server
 - Slurm backend adapter
@@ -25,6 +26,7 @@ Current implementation includes:
 Start here:
 
 - `./install.sh --with-codex`
+- `local-ai-broker version`
 - `local-ai-broker demo --config configs/broker/generated.local.json`
 - `go run ./cmd/local-ai-broker install binaries`
 - `go run ./cmd/local-ai-broker init --local`

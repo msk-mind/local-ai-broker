@@ -12,7 +12,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-export BROKER_LISTEN_ADDR="127.0.0.1:18083"
+export BROKER_LISTEN_ADDR="$(pick_free_loopback_addr)"
 export BROKER_JOB_STORE_PATH="${BASE_DIR}/jobs.json"
 export BROKER_RUN_ROOT_PATH="${BASE_DIR}/runs"
 export BROKER_REPO_ROOT_PATH="${REPO_ROOT}"

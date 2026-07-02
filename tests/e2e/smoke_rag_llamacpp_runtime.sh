@@ -14,14 +14,16 @@ cleanup() {
 trap cleanup EXIT
 
 FAKE_COUNT_FILE="${BASE_DIR}/fake-llm-count.txt"
+FAKE_LLM_ADDR="$(pick_free_loopback_addr)"
+FAKE_LLM_PORT="${FAKE_LLM_ADDR##*:}"
 python3 "${SCRIPT_DIR}/fake_openai_server.py" \
-  --listen-port 18090 \
+  --listen-port "${FAKE_LLM_PORT}" \
   --count-file "${FAKE_COUNT_FILE}" &
 FAKE_LLM_PID=$!
 
-wait_for_http_ok "http://127.0.0.1:18090/healthz"
+wait_for_http_ok "http://${FAKE_LLM_ADDR}/healthz"
 
-export BROKER_LISTEN_ADDR="127.0.0.1:18082"
+export BROKER_LISTEN_ADDR="$(pick_free_loopback_addr)"
 export BROKER_JOB_STORE_PATH="${BASE_DIR}/jobs.json"
 export BROKER_RUN_ROOT_PATH="${BASE_DIR}/runs"
 export BROKER_REPO_ROOT_PATH="${REPO_ROOT}"
@@ -30,7 +32,7 @@ export BROKER_LOCAL_MODE="command"
 export BROKER_LOCAL_SCRIPT_PATH="${REPO_ROOT}/deploy/local/broker_worker.sh"
 export BROKER_AUDIT_LOG_PATH="${BASE_DIR}/audit.jsonl"
 export BROKER_AUDIT_VERIFY_MODE="warn"
-export BROKER_RUNTIME_LLAMACPP_BASE_URL="http://127.0.0.1:18090"
+export BROKER_RUNTIME_LLAMACPP_BASE_URL="http://${FAKE_LLM_ADDR}"
 export BROKER_RUNTIME_LLAMACPP_TIMEOUT_SECONDS="10"
 
 RAG_REPO="${BASE_DIR}/repo"

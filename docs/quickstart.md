@@ -25,6 +25,7 @@ This gives you:
 
 - one-command bootstrap
 - installed broker binaries for normal use
+- a `local-ai-broker version` check for installed build metadata
 - generated config with sane defaults
 - environment validation
 - one known-good local job submission

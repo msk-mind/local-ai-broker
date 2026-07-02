@@ -20,6 +20,12 @@ import (
 	"github.com/msk-mind/local-ai-broker/broker/pkg/types"
 )
 
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 type commandError struct {
 	message string
 	code    int
@@ -49,6 +55,8 @@ func run(args []string) error {
 	switch args[0] {
 	case "demo":
 		return runDemo(args[1:])
+	case "version":
+		return runVersion(args[1:])
 	case "init":
 		return runInit(args[1:])
 	case "doctor":
@@ -75,7 +83,20 @@ Usage:
   local-ai-broker install codex [--local|--slurm|--all] [--codex-home PATH]
   local-ai-broker install binaries [--bin-dir PATH]
   local-ai-broker up [--local|--slurm] [--listen-addr ADDR] [--config PATH] [--env-file PATH]
+  local-ai-broker version
 `)
+}
+
+func runVersion(args []string) error {
+	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args); err != nil {
+		return commandError{message: err.Error(), code: 2}
+	}
+	fmt.Printf("local-ai-broker %s\n", version)
+	fmt.Printf("commit: %s\n", commit)
+	fmt.Printf("date: %s\n", date)
+	return nil
 }
 
 func runDemo(args []string) error {

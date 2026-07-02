@@ -17,6 +17,7 @@ Use the installer for the common setup path:
 ```bash
 ./install.sh --with-codex
 export PATH="$HOME/.local/bin:$PATH"
+local-ai-broker demo --config configs/broker/generated.local.json
 local-ai-broker up --config configs/broker/generated.local.json
 ```
 
@@ -26,6 +27,7 @@ This gives you:
 - installed broker binaries for normal use
 - generated config with sane defaults
 - environment validation
+- one known-good local job submission
 - broker startup with sensible defaults
 - Codex profile installation without editing config files manually
 

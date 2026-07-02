@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -127,6 +128,16 @@ func TestWriteBootstrapConfig(t *testing.T) {
 func TestRunInstallRequiresTarget(t *testing.T) {
 	if err := runInstall(nil); err == nil {
 		t.Fatal("expected install usage error")
+	}
+}
+
+func TestPickFreeLoopbackAddr(t *testing.T) {
+	addr, err := pickFreeLoopbackAddr()
+	if err != nil {
+		t.Fatalf("pick free addr: %v", err)
+	}
+	if _, err := net.ResolveTCPAddr("tcp", addr); err != nil {
+		t.Fatalf("resolve addr %q: %v", addr, err)
 	}
 }
 

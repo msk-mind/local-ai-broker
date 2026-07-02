@@ -112,4 +112,5 @@ Add to PATH if needed:
 
 Next:
   ${BIN_DIR}/local-ai-broker up --config ${CONFIG_OUTPUT}
+  ${BIN_DIR}/local-ai-broker demo --config ${CONFIG_OUTPUT}
 EOF

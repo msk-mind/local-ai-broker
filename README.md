@@ -25,6 +25,7 @@ Current implementation includes:
 Start here:
 
 - `./install.sh --with-codex`
+- `local-ai-broker demo --config configs/broker/generated.local.json`
 - `go run ./cmd/local-ai-broker install binaries`
 - `go run ./cmd/local-ai-broker init --local`
 - `go run ./cmd/local-ai-broker doctor`

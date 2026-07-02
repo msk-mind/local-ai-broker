@@ -1,15 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/msk-mind/local-ai-broker/broker/pkg/types"
 )
 
 type commandError struct {
@@ -39,6 +47,8 @@ func run(args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "demo":
+		return runDemo(args[1:])
 	case "init":
 		return runInit(args[1:])
 	case "doctor":
@@ -59,12 +69,85 @@ func printRootUsage() {
 	fmt.Print(`local-ai-broker
 
 Usage:
+  local-ai-broker demo [--config PATH]
   local-ai-broker init [--local|--slurm] [--output PATH] [flags]
   local-ai-broker doctor [--local|--slurm] [--config PATH]
   local-ai-broker install codex [--local|--slurm|--all] [--codex-home PATH]
   local-ai-broker install binaries [--bin-dir PATH]
   local-ai-broker up [--local|--slurm] [--listen-addr ADDR] [--config PATH] [--env-file PATH]
 `)
+}
+
+func runDemo(args []string) error {
+	fs := flag.NewFlagSet("demo", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	configPath := fs.String("config", "", "optional broker config JSON file")
+	if err := fs.Parse(args); err != nil {
+		return commandError{message: err.Error(), code: 2}
+	}
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		return err
+	}
+	tempRoot, err := os.MkdirTemp("", "local-ai-broker-demo.")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tempRoot)
+
+	listenAddr, err := pickFreeLoopbackAddr()
+	if err != nil {
+		return err
+	}
+	envMap := defaultBrokerEnv(repoRoot, "local")
+	envMap["BROKER_LISTEN_ADDR"] = listenAddr
+	envMap["BROKER_JOB_STORE_PATH"] = filepath.Join(tempRoot, "jobs.json")
+	envMap["BROKER_RUN_ROOT_PATH"] = filepath.Join(tempRoot, "runs")
+	envMap["BROKER_AUDIT_LOG_PATH"] = filepath.Join(tempRoot, "audit.jsonl")
+	if *configPath != "" {
+		loaded, err := loadBootstrapConfig(repoRoot, *configPath)
+		if err != nil {
+			return err
+		}
+		for k, v := range loaded {
+			envMap[k] = v
+		}
+		envMap["BROKER_LISTEN_ADDR"] = listenAddr
+		envMap["BROKER_JOB_STORE_PATH"] = filepath.Join(tempRoot, "jobs.json")
+		envMap["BROKER_RUN_ROOT_PATH"] = filepath.Join(tempRoot, "runs")
+		envMap["BROKER_AUDIT_LOG_PATH"] = filepath.Join(tempRoot, "audit.jsonl")
+	}
+	if envMap["BROKER_BACKEND"] != "local" {
+		return commandError{message: "demo currently supports local backend configs only", code: 2}
+	}
+
+	inputPath := filepath.Join(tempRoot, "demo.txt")
+	if err := os.WriteFile(inputPath, []byte("Local AI Broker demo document.\n- one\n- two\n"), 0o644); err != nil {
+		return err
+	}
+
+	cmd, err := startBrokerServerProcess(repoRoot, envMap)
+	if err != nil {
+		return err
+	}
+	defer stopProcess(cmd)
+
+	baseURL := "http://" + listenAddr
+	if err := waitForHealthz(baseURL, 10*time.Second); err != nil {
+		return err
+	}
+
+	jobID, err := submitDemoJob(baseURL, inputPath)
+	if err != nil {
+		return err
+	}
+	result, err := waitForResult(baseURL, jobID, 15*time.Second)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Demo job succeeded: %s\n", jobID)
+	fmt.Println(result)
+	return nil
 }
 
 func runInit(args []string) error {
@@ -615,6 +698,156 @@ func writeBootstrapConfig(path string, cfg bootstrapConfig) error {
 	}
 	content = append(content, '\n')
 	return os.WriteFile(path, content, 0o644)
+}
+
+func startBrokerServerProcess(repoRoot string, envMap map[string]string) (*exec.Cmd, error) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		return nil, commandError{message: "missing required executable: go", code: 1}
+	}
+	cmd := exec.Command(goBin, "run", "./broker/cmd/broker-server")
+	cmd.Dir = repoRoot
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	cmd.Env = mergeEnv(envMap)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
+func stopProcess(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = cmd.Process.Signal(os.Interrupt)
+	done := make(chan struct{})
+	go func() {
+		_, _ = cmd.Process.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+	}
+}
+
+func pickFreeLoopbackAddr() (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	defer ln.Close()
+	return ln.Addr().String(), nil
+}
+
+func waitForHealthz(baseURL string, timeout time.Duration) error {
+	client := &http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(strings.TrimRight(baseURL, "/") + "/healthz")
+		if err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return commandError{message: "timed out waiting for broker health endpoint", code: 1}
+}
+
+func submitDemoJob(baseURL, inputPath string) (string, error) {
+	reqBody := types.SubmitJobRequest{
+		TaskType: "document_summary",
+		InputRefs: []types.InputRef{
+			{
+				Type:           "file",
+				URI:            "file://" + inputPath,
+				Classification: "internal",
+			},
+		},
+		OutputSchema: types.OutputSchemaRef{Name: "document_summary_v1"},
+	}
+	payload, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+	respBody, err := doJSONRequest(http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/jobs", payload)
+	if err != nil {
+		return "", err
+	}
+	var submitResp struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(respBody, &submitResp); err != nil {
+		return "", err
+	}
+	if submitResp.JobID == "" {
+		return "", commandError{message: "broker submit response did not contain job_id", code: 1}
+	}
+	return submitResp.JobID, nil
+}
+
+func waitForResult(baseURL, jobID string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		respBody, err := doJSONRequest(http.MethodGet, strings.TrimRight(baseURL, "/")+"/v1/jobs/"+jobID, nil)
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		var job struct {
+			State string          `json:"state"`
+			Result json.RawMessage `json:"result"`
+		}
+		if err := json.Unmarshal(respBody, &job); err != nil {
+			return "", err
+		}
+		switch job.State {
+		case "succeeded":
+			resultBody, err := doJSONRequest(http.MethodGet, strings.TrimRight(baseURL, "/")+"/v1/jobs/"+jobID+"/result", nil)
+			if err != nil {
+				return "", err
+			}
+			return string(resultBody), nil
+		case "failed", "cancelled":
+			return "", commandError{message: "demo job did not succeed; final state=" + job.State, code: 1}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return "", commandError{message: "timed out waiting for demo job result", code: 1}
+}
+
+func doJSONRequest(method, url string, payload []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var body io.Reader
+	if payload != nil {
+		body = bytes.NewReader(payload)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("request failed with %s: %s", resp.Status, strings.TrimSpace(string(respBody)))
+	}
+	return respBody, nil
 }
 
 func resolveConfigPath(repoRoot, configDir, value string) string {

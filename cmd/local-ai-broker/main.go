@@ -974,7 +974,20 @@ func mergeEnv(overrides map[string]string) []string {
 			base[key] = value
 		}
 	}
-	for _, unsetKey := range []string{"GOROOT"} {
+	for _, unsetKey := range []string{
+		"GOROOT",
+		"CC",
+		"CXX",
+		"CGO_CFLAGS",
+		"CGO_CPPFLAGS",
+		"CGO_CXXFLAGS",
+		"CGO_LDFLAGS",
+		"CGO_FFLAGS",
+		"GCCGO",
+		"GCC_EXEC_PREFIX",
+		"AR",
+		"PKG_CONFIG",
+	} {
 		delete(base, unsetKey)
 	}
 	for k, v := range overrides {

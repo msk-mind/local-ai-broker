@@ -81,6 +81,7 @@ run_cli() {
   (
     cd "${REPO_ROOT}"
     env -u GOROOT GOENV=off \
+      CGO_ENABLED=0 \
       GOCACHE="${GOCACHE}" \
       GOPATH="${GOPATH}" \
       "${GO_BIN}" run ./cmd/local-ai-broker "$@"

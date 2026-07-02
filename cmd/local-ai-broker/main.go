@@ -348,9 +348,10 @@ func runInstallBinaries(args []string) error {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		cmd.Env = mergeEnv(map[string]string{
-			"GOENV":   "off",
-			"GOCACHE": envOr("GOCACHE", "/tmp/local-ai-broker-gocache"),
-			"GOPATH":  envOr("GOPATH", "/tmp/local-ai-broker-gopath"),
+			"GOENV":       "off",
+			"GOCACHE":     envOr("GOCACHE", "/tmp/local-ai-broker-gocache"),
+			"GOPATH":      envOr("GOPATH", "/tmp/local-ai-broker-gopath"),
+			"CGO_ENABLED": "0",
 		})
 		fmt.Printf("building %s -> %s\n", target.name, outputPath)
 		if err := cmd.Run(); err != nil {

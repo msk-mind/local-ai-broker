@@ -12,19 +12,17 @@ The fastest way to validate the current control plane is to use the fake-Slurm e
 
 ## Recommended Entry Point
 
-Use the bootstrap CLI for the common setup path:
+Use the installer for the common setup path:
 
 ```bash
-go run ./cmd/local-ai-broker install binaries
+./install.sh --with-codex
 export PATH="$HOME/.local/bin:$PATH"
-local-ai-broker init --local
-local-ai-broker doctor --config configs/broker/generated.local.json
 local-ai-broker up --config configs/broker/generated.local.json
-local-ai-broker install codex --all
 ```
 
 This gives you:
 
+- one-command bootstrap
 - installed broker binaries for normal use
 - generated config with sane defaults
 - environment validation
@@ -58,9 +56,8 @@ This mode is useful when you want to inspect the HTTP API directly.
 Recommended local flow on this machine or a MacBook:
 
 ```bash
-go run ./cmd/local-ai-broker install binaries
+./install.sh
 export PATH="$HOME/.local/bin:$PATH"
-local-ai-broker init --local
 ```
 
 Start the server:
@@ -97,7 +94,7 @@ The generated profiles keep broker MCP wiring session-scoped, so a normal `codex
 If your cluster has lightly used P40 nodes and more constrained A100 nodes, start from:
 
 ```bash
-go run ./cmd/local-ai-broker init --slurm --output /tmp/local-ai-broker.json
+./install.sh --slurm --config-output /tmp/local-ai-broker.json
 ```
 
 Then edit the partition names if your site uses different labels:
@@ -124,7 +121,7 @@ For live local `llama.cpp` reranking/compression instead of deterministic fallba
 Start the server:
 
 ```bash
-go run ./cmd/local-ai-broker up --config /tmp/local-ai-broker.json
+local-ai-broker up --config /tmp/local-ai-broker.json
 ```
 
 With that profile:

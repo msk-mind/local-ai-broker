@@ -18,6 +18,8 @@ Representative examples for this area would include:
 
 Current examples:
 
+- `cdsi-cluster.example.json`: CDSI cluster profile using a shared GPU partition, typed GPU requests, and `pllimsksparky[1-4]` as the default P40 compression lane
+- `cdsi-cluster.env.example`: environment-variable equivalent of the CDSI cluster profile
 - `local.example.json`: local command-mode development config
 - `slurm-p40-a100.example.json`: Slurm-backed config for a cluster with one shared GPU partition where P40 is the default RAG compression tier and A100 is escalation-only reasoning capacity
 - `slurm-p40-a100.env.example`: environment-variable equivalent for shells or existing automation

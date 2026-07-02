@@ -50,6 +50,8 @@ build_bin "broker-cli" ./broker/cmd/broker-cli
 
 cp install.sh "${BUNDLE_ROOT}/"
 mkdir -p "${BUNDLE_ROOT}/configs/broker" "${BUNDLE_ROOT}/examples/mcp-clients"
+cp configs/broker/cdsi-cluster.example.json "${BUNDLE_ROOT}/configs/broker/"
+cp configs/broker/cdsi-cluster.env.example "${BUNDLE_ROOT}/configs/broker/"
 cp configs/broker/local.example.json "${BUNDLE_ROOT}/configs/broker/"
 cp configs/broker/slurm-p40-a100.example.json "${BUNDLE_ROOT}/configs/broker/"
 cp examples/mcp-clients/install_codex_profiles.sh "${BUNDLE_ROOT}/examples/mcp-clients/"

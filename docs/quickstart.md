@@ -100,6 +100,12 @@ If your cluster has lightly used P40 nodes and more constrained A100 nodes, star
 ./install.sh --slurm --config-output /tmp/local-ai-broker.json
 ```
 
+For the CDSI cluster specifically, start from:
+
+```bash
+cp configs/broker/cdsi-cluster.example.json /tmp/local-ai-broker.json
+```
+
 Then edit the placement defaults if your site uses different labels:
 
 - `slurm.partition_cpu`
@@ -109,6 +115,15 @@ Then edit the placement defaults if your site uses different labels:
 - `slurm.gpu_type_a100`
 
 The generated Slurm profile assumes one shared GPU partition and expresses tier selection through GPU type requests.
+
+On CDSI, the checked-in defaults are:
+
+- `partition_cpu = "cpu"`
+- `partition_gpu = "hpc"`
+- `gpu_request_mode = "gres"`
+- `gpu_type_p40 = "p40"`
+- `gpu_type_a100 = "a100"`
+- `nodelist_p40 = "pllimsksparky[1-4]"`
 
 If you want the P40 tier to prefer a specific node pool directly, also set:
 

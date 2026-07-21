@@ -1,0 +1,74 @@
+{
+  "schema": "gpu_service_registry_v1",
+  "updated_at": "2026-07-13T20:52:17.138230Z",
+  "records": [
+    {
+      "id": "gpu-p40-retrieval-bdc52399220bd666",
+      "tier": "p40-retrieval",
+      "role": "retrieval",
+      "state": "ready",
+      "endpoint_auth": {
+        "type": "bearer",
+        "bearer_token": "-XTUDT9w0gNj9qUGXdL5nvhONukLqtUwFu6-DfMT3BFNrSs79c8YDNuWsj7adK_p"
+      },
+      "model_profile": "p40-retrieval-glm47",
+      "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+      "capabilities": [
+        "embeddings",
+        "index_status",
+        "index_upsert",
+        "faiss_search",
+        "rerank"
+      ],
+      "context_limit_tokens": 8192,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "slurm_job_id": "3673246",
+      "scheduler_state": "RUNNING",
+      "created_at": "2026-07-13T20:51:28.756862016Z",
+      "startup_deadline": "2026-07-13T20:55:27.739176737Z",
+      "heartbeat_at": "2026-07-13T20:52:17.138176Z",
+      "lease_expires_at": "2026-07-14T00:52:17.138176Z",
+      "absolute_lease_expires_at": "0001-01-01T00:00:00Z",
+      "last_health_check_at": "0001-01-01T00:00:00Z",
+      "registration_token_sha256": "fc8df404f6b0ec9506ae28a9b3416814db9bd3071e8fc604c17273d4b91046ee",
+      "endpoint": "http://pllimsksparky1.mskcc.org:45853",
+      "health_error": "",
+      "failure_category": ""
+    },
+    {
+      "id": "gpu-p40-synthesis-354f9f145a541199",
+      "tier": "p40-synthesis",
+      "role": "synthesis",
+      "state": "ready",
+      "endpoint_auth": {
+        "type": "bearer",
+        "bearer_token": "-fkVWBoZ5sfbMKFxA0OjAHInOk5RGIKI8cGKGGHzJYogzF-c1FmDJDjLNCprHmlB"
+      },
+      "model_profile": "p40-synthesis-glm47",
+      "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+      "capabilities": [
+        "chat_completions"
+      ],
+      "context_limit_tokens": 8192,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "slurm_job_id": "3673247",
+      "scheduler_state": "RUNNING",
+      "created_at": "2026-07-13T20:51:28.827705903Z",
+      "startup_deadline": "2026-07-13T20:55:27.739176737Z",
+      "heartbeat_at": "2026-07-13T20:52:08.454774Z",
+      "lease_expires_at": "2026-07-14T00:52:08.454774Z",
+      "absolute_lease_expires_at": "0001-01-01T00:00:00Z",
+      "last_health_check_at": "0001-01-01T00:00:00Z",
+      "registration_token_sha256": "1560696f2b5e1a7ce6f59e2457ce0221fefbb0a0869d085eb05de5eadd2eaeb9",
+      "endpoint": "http://pllimsksparky2.mskcc.org:37713",
+      "health_error": "",
+      "failure_category": ""
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "attempts": [
+    {
+      "operation": "semantic_retrieval",
+      "tier": "p40-retrieval",
+      "slurm_job_id": "3672154",
+      "gpu_count": 1,
+      "gpu_type": "p40",
+      "model_profile": "p40-retrieval-glm47",
+      "attempt": 1,
+      "status": "failed",
+      "failure_category": "service_failure",
+      "escalation_reason": "primary_retrieval"
+    }
+  ]
+}

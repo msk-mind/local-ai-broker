@@ -1,0 +1,134 @@
+{
+  "first": {
+    "elapsed_seconds": 18.360950231552124,
+    "retrieval": {
+      "fingerprint": "sha256:185aaa1314854d5f31a0526ab0158ce5389b84553dd14f218e363021ef829dfb",
+      "fingerprint_sources": [
+        "git"
+      ],
+      "chunks_indexed": 45,
+      "lexical_candidates": 45,
+      "semantic_candidates": 45,
+      "fused_candidates": 45,
+      "reranked_candidates": 45,
+      "selected_evidence": 6,
+      "candidate_tokens": 9089,
+      "evidence_tokens": 2054,
+      "chunk_cache_total_files": 3,
+      "chunk_cache_reused_files": 0,
+      "chunk_cache_rebuilt_files": 3,
+      "lexical_index_cache_hit": false,
+      "semantic_index_cache_hit": false,
+      "semantic_index_document_count": 45,
+      "semantic_index_embedded_documents": 0,
+      "semantic_index_reused_documents": 45,
+      "budgets": {
+        "retrieval_token_budget": 32000,
+        "evidence_token_budget": 12000,
+        "final_pack_token_budget": 8000,
+        "synthesis_context_token_budget": 24000
+      },
+      "final_pack_tokens": 2158
+    },
+    "quality": {
+      "result": "evidence_only",
+      "retrieval": "gpu",
+      "reranking": "gpu",
+      "synthesis": "not_requested",
+      "answer_ready": false
+    },
+    "log_before": {
+      "embeddings": 32,
+      "index_status": 8,
+      "index_upsert": 8,
+      "search": 4,
+      "rerank": 5
+    },
+    "log_after": {
+      "embeddings": 40,
+      "index_status": 10,
+      "index_upsert": 10,
+      "search": 5,
+      "rerank": 6
+    },
+    "log_delta": {
+      "embeddings": 8,
+      "index_status": 2,
+      "index_upsert": 2,
+      "search": 1,
+      "rerank": 1
+    },
+    "provenance": {
+      "repository_fingerprint": "sha256:93fe92978e89f98696fad0e31ea225e620b691b9023de2f50dc1170db2de9a05",
+      "index_fingerprint": "sha256:185aaa1314854d5f31a0526ab0158ce5389b84553dd14f218e363021ef829dfb",
+      "retrieval_model_profile": "p40-retrieval-glm47",
+      "rerank_model_profile": "p40-retrieval-glm47"
+    }
+  },
+  "second": {
+    "elapsed_seconds": 17.605623483657837,
+    "retrieval": {
+      "fingerprint": "sha256:185aaa1314854d5f31a0526ab0158ce5389b84553dd14f218e363021ef829dfb",
+      "fingerprint_sources": [
+        "git"
+      ],
+      "chunks_indexed": 45,
+      "lexical_candidates": 45,
+      "semantic_candidates": 45,
+      "fused_candidates": 45,
+      "reranked_candidates": 45,
+      "selected_evidence": 6,
+      "candidate_tokens": 9089,
+      "evidence_tokens": 2054,
+      "chunk_cache_total_files": 3,
+      "chunk_cache_reused_files": 3,
+      "chunk_cache_rebuilt_files": 0,
+      "lexical_index_cache_hit": true,
+      "semantic_index_cache_hit": true,
+      "semantic_index_document_count": 45,
+      "semantic_index_embedded_documents": 0,
+      "semantic_index_reused_documents": 0,
+      "budgets": {
+        "retrieval_token_budget": 32000,
+        "evidence_token_budget": 12000,
+        "final_pack_token_budget": 8000,
+        "synthesis_context_token_budget": 24000
+      },
+      "final_pack_tokens": 2158
+    },
+    "quality": {
+      "result": "evidence_only",
+      "retrieval": "gpu",
+      "reranking": "gpu",
+      "synthesis": "not_requested",
+      "answer_ready": false
+    },
+    "log_before": {
+      "embeddings": 40,
+      "index_status": 10,
+      "index_upsert": 10,
+      "search": 5,
+      "rerank": 6
+    },
+    "log_after": {
+      "embeddings": 48,
+      "index_status": 11,
+      "index_upsert": 10,
+      "search": 6,
+      "rerank": 7
+    },
+    "log_delta": {
+      "embeddings": 8,
+      "index_status": 1,
+      "index_upsert": 0,
+      "search": 1,
+      "rerank": 1
+    },
+    "provenance": {
+      "repository_fingerprint": "sha256:93fe92978e89f98696fad0e31ea225e620b691b9023de2f50dc1170db2de9a05",
+      "index_fingerprint": "sha256:185aaa1314854d5f31a0526ab0158ce5389b84553dd14f218e363021ef829dfb",
+      "retrieval_model_profile": "p40-retrieval-glm47",
+      "rerank_model_profile": "p40-retrieval-glm47"
+    }
+  }
+}

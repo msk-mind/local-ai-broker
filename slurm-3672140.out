@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "/gpfs/mskmind_ess/limr/repos/local-ai-broker/workers/gpu-service/main.py", line 465, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/gpfs/mskmind_ess/limr/repos/local-ai-broker/workers/gpu-service/main.py", line 453, in main
+    spec = load_json(spec_path)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/gpfs/mskmind_ess/limr/repos/local-ai-broker/workers/gpu-service/main.py", line 63, in load_json
+    with Path(path).open("r", encoding="utf-8") as handle:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/gpfs/cdsi_ess/home/limr/miniforge3/lib/python3.12/pathlib.py", line 1013, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/local-ai-broker-gpu-NnPBex/gpu-service-launches/gpu-p40-synthesis-db2a84f3cebd53cf.json'

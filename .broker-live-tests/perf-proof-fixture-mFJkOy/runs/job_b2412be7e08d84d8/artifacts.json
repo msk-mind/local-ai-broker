@@ -1,0 +1,20 @@
+[
+  {
+    "artifact_id": "artifact_evidence_pack",
+    "artifact_type": "evidence_pack",
+    "path": ".broker-live-tests/perf-proof-fixture-mFJkOy/runs/job_b2412be7e08d84d8/evidence_pack.json",
+    "classification": "unknown"
+  },
+  {
+    "artifact_id": "artifact_retrieval_result",
+    "artifact_type": "retrieval_result",
+    "path": ".broker-live-tests/perf-proof-fixture-mFJkOy/runs/job_b2412be7e08d84d8/retrieval_result.json",
+    "classification": "unknown"
+  },
+  {
+    "artifact_id": "artifact_runtime_diagnostics",
+    "artifact_type": "runtime_diagnostics",
+    "path": ".broker-live-tests/perf-proof-fixture-mFJkOy/runs/job_b2412be7e08d84d8/runtime_diagnostics.json",
+    "classification": "unknown"
+  }
+]

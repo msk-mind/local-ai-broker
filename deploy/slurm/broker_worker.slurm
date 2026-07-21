@@ -4,6 +4,7 @@
 #SBATCH --error=.broker/slurm/broker_worker_%j.err
 
 set -euo pipefail
+umask 077
 
 if [ -n "${BROKER_ARRAY_MANIFEST:-}" ]; then
   if [ -z "${SLURM_ARRAY_TASK_ID:-}" ]; then
@@ -183,7 +184,16 @@ repo_summary)
     --output-dir "${OUTPUT_DIR}" \
     --heartbeat-path "${HEARTBEAT_PATH}"
   ;;
-rag_compress|debug_with_local_context|summarize_logs|inspect_repo|propose_patch)
+inspect_repo)
+  write_heartbeat "running" "running_model" 10 "Launching inspect_repo worker" "{}"
+  python3 -S "${REPO_ROOT}/workers/rag-compression/inspect_repo_worker.py" \
+    --job-spec "${JOB_SPEC_PATH}" \
+    --execution-plan "${EXECUTION_PLAN_PATH}" \
+    --input-manifest "${INPUT_MANIFEST_PATH}" \
+    --output-dir "${OUTPUT_DIR}" \
+    --heartbeat-path "${HEARTBEAT_PATH}"
+  ;;
+rag_compress|debug_with_local_context|summarize_logs|propose_patch)
   write_heartbeat "running" "running_model" 10 "Launching RAG compression worker" "{}"
   python3 "${REPO_ROOT}/workers/rag-compression/main.py" \
     --job-spec "${JOB_SPEC_PATH}" \

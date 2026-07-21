@@ -1,0 +1,7 @@
+Broker worker started
+Broker job ID: job_06967659de705a0d
+Task type: inspect_repo
+Output dir: /gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker/.broker-live-tests/e2e-S5VFfF/runs/job_06967659de705a0d
+Repo root: /gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker
+Node: pllimskhpc1
+Execution plan: /gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker/.broker-live-tests/e2e-S5VFfF/runs/job_06967659de705a0d/execution_plan.json

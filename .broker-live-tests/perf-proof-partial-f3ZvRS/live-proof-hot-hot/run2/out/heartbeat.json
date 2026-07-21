@@ -1,0 +1,13 @@
+{
+  "job_id": "job_run2",
+  "state": "completed",
+  "phase": "completed",
+  "percent": 100,
+  "message": "Repository inspection completed",
+  "timestamp": "2026-07-13T22:28:43Z",
+  "metrics": {
+    "evidence_count": 6,
+    "quality_result": "evidence_only",
+    "artifact_count": 3
+  }
+}

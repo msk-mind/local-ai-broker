@@ -1,0 +1,194 @@
+{
+  "fingerprint": "sha256:a2cc19f7c46ec07ef6267d99e7119f9df129d8c4c960e10e9cfeb24c606938f9",
+  "lexical_index": "/gpfs/mskmind_ess/limr/repos/local-ai-broker/.broker-live-tests/perf-proof-BF8Ds8/runs/repo-inspection-cache/lexical-a2cc19f7c46ec07ef6267d99e7119f9df129d8c4c960e10e9cfeb24c606938f9.sqlite3",
+  "lexical_index_cache_hit": false,
+  "fingerprint_sources": [
+    "git"
+  ],
+  "chunks_indexed": 2082,
+  "lexical_candidates": 128,
+  "semantic_candidates": 0,
+  "fused_candidates": 64,
+  "reranked_candidates": 0,
+  "selected_evidence": 12,
+  "candidate_tokens": 31952,
+  "evidence_tokens": 7839,
+  "semantic_index_cache_hit": false,
+  "budgets": {
+    "retrieval_token_budget": 32000,
+    "evidence_token_budget": 12000,
+    "final_pack_token_budget": 8000,
+    "synthesis_context_token_budget": 24000
+  },
+  "final_pack_tokens": 7937,
+  "selected": [
+    {
+      "id": "ev_001",
+      "path": "broker/pkg/gpuservice/control_spool.go",
+      "source_refs": [
+        {
+          "path": "broker/pkg/gpuservice/control_spool.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 1,
+          "line_end": 26,
+          "content_hash": "sha256:0b712a514c81ea319ea30d6ab7c12f3563b782cf2e4dcde2ed58c4eab729d934"
+        }
+      ]
+    },
+    {
+      "id": "ev_002",
+      "path": "workers/rag-compression/service_control.py",
+      "source_refs": [
+        {
+          "path": "workers/rag-compression/service_control.py",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 173,
+          "line_end": 217,
+          "content_hash": "sha256:9e5351cdb7f3da2c0269e32e2dedb23fac38f04afc578d540ad5f2bb60e4c7d4"
+        }
+      ]
+    },
+    {
+      "id": "ev_003",
+      "path": "broker/cmd/common/audit_startup.go",
+      "source_refs": [
+        {
+          "path": "broker/cmd/common/audit_startup.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 10,
+          "line_end": 39,
+          "content_hash": "sha256:54219bebfd69f3d55b796b68f04965ebbdb29151a4ff29ea78c410ff70a98764"
+        }
+      ]
+    },
+    {
+      "id": "ev_004",
+      "path": "broker/cmd/common/gpu_services.go",
+      "source_refs": [
+        {
+          "path": "broker/cmd/common/gpu_services.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 18,
+          "line_end": 47,
+          "content_hash": "sha256:d2f57865d5ea1adbba9acaa8b6c2bee8859f3ff0f6c179e49a4d427a1fa9c316"
+        }
+      ]
+    },
+    {
+      "id": "ev_005",
+      "path": "broker/pkg/gpuservice/config.go",
+      "source_refs": [
+        {
+          "path": "broker/pkg/gpuservice/config.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 1,
+          "line_end": 16,
+          "content_hash": "sha256:0132fa723056b54f3627c70149cab7bf1406a0c2e09e4a88b940126f287f034c"
+        }
+      ]
+    },
+    {
+      "id": "ev_006",
+      "path": "workers/rag-compression/inspection_pipeline.py",
+      "source_refs": [
+        {
+          "path": "workers/rag-compression/inspection_pipeline.py",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 419,
+          "line_end": 486,
+          "content_hash": "sha256:9cc5e096171df8f8364b5c8dfda4419ec5a582841c2868d2ce025cf5c4f6c1d6"
+        }
+      ]
+    },
+    {
+      "id": "ev_007",
+      "path": "workers/rag-compression/gpu_client.py",
+      "source_refs": [
+        {
+          "path": "workers/rag-compression/gpu_client.py",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 281,
+          "line_end": 299,
+          "content_hash": "sha256:e13762cac968641643d1eb66a6cf73036e3b69946a69346a1ac3dbd0af2366ef"
+        }
+      ]
+    },
+    {
+      "id": "ev_008",
+      "path": "workers/rag-compression/inspection_index.py",
+      "source_refs": [
+        {
+          "path": "workers/rag-compression/inspection_index.py",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 742,
+          "line_end": 861,
+          "content_hash": "sha256:5316c2934023fd3bdd8773c1a718195ee556f4e23328eed108d893a2f8886860"
+        }
+      ]
+    },
+    {
+      "id": "ev_009",
+      "path": "broker/cmd/broker-server/main.go",
+      "source_refs": [
+        {
+          "path": "broker/cmd/broker-server/main.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 23,
+          "line_end": 100,
+          "content_hash": "sha256:99f38dc59bfa5703604ee2a5dc13a7f37c59501e635d13782adf7cba5dbfe224"
+        }
+      ]
+    },
+    {
+      "id": "ev_010",
+      "path": "broker/cmd/broker-mcp/main.go",
+      "source_refs": [
+        {
+          "path": "broker/cmd/broker-mcp/main.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 20,
+          "line_end": 84,
+          "content_hash": "sha256:ebb8c851963aafaad62a764f73fbe611d49491efe8aae87d1c0d4fa6a3ae0578"
+        }
+      ]
+    },
+    {
+      "id": "ev_011",
+      "path": "broker/pkg/config/config.go",
+      "source_refs": [
+        {
+          "path": "broker/pkg/config/config.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 128,
+          "line_end": 205,
+          "content_hash": "sha256:30e5dffc09cdcd49f5f95d343d650191b051338180a39387ce75717b04b1bf32"
+        }
+      ]
+    },
+    {
+      "id": "ev_012",
+      "path": "cmd/local-ai-broker/main.go",
+      "source_refs": [
+        {
+          "path": "cmd/local-ai-broker/main.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 856,
+          "line_end": 956,
+          "content_hash": "sha256:9cf1df11f2eebc6a886ef1c31af4c97cf7f3007181571bbcad6900856a3c85ae"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,221 @@
+{
+  "query": "Where is the GPU service control plane started for the broker transports?",
+  "evidence": [
+    {
+      "id": "ev_001",
+      "path": "broker/pkg/gpuservice/control_spool.go",
+      "language": "go",
+      "symbol": "",
+      "source_refs": [
+        {
+          "path": "broker/pkg/gpuservice/control_spool.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 1,
+          "line_end": 26,
+          "content_hash": "sha256:0b712a514c81ea319ea30d6ab7c12f3563b782cf2e4dcde2ed58c4eab729d934"
+        }
+      ],
+      "excerpt": "package gpuservice\n\nimport (\n\t\"context\"\n\t\"crypto/hmac\"\n\t\"crypto/sha256\"\n\t\"encoding/base64\"\n\t\"encoding/hex\"\n\t\"encoding/json\"\n\t\"errors\"\n\t\"fmt\"\n\t\"os\"\n\t\"path/filepath\"\n\t\"sort\"\n\t\"strconv\"\n\t\"strings\"\n\t\"time\"\n)\n\nconst (\n\tcontrolRequestSchema    = \"gpu_service_demand_v1\"\n\tcontrolResponseSchema   = \"gpu_service_demand_response_v1\"\n\tcontrolFailureSchema    = \"gpu_service_failure_report_v1\"\n\tmaxControlFileBytes     = 64 * 1024\n\torphanResponseRetention = 5 * time.Minute\n)",
+      "rank": 1
+    },
+    {
+      "id": "ev_002",
+      "path": "workers/rag-compression/service_control.py",
+      "language": "python",
+      "symbol": "report_p40_service_failure",
+      "source_refs": [
+        {
+          "path": "workers/rag-compression/service_control.py",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 173,
+          "line_end": 217,
+          "content_hash": "sha256:9e5351cdb7f3da2c0269e32e2dedb23fac38f04afc578d540ad5f2bb60e4c7d4"
+        }
+      ],
+      "excerpt": "def report_p40_service_failure(execution_plan, service, failure_category, reason):\n    \"\"\"Emit an authenticated lease-failure action without scheduling or waiting.\n\n    Returns True only after the mode-0600 action file is atomically published.\n    Invalid, non-P40, or unconfigured reports return False so reporting never\n    masks the original inference failure.\n    \"\"\"\n\n    execution_plan = execution_plan or {}\n    service = service or {}\n    request_dir = execution_plan.get(\"gpu_service_request_path\") or os.environ.get(\n        \"BROKER_GPU_SERVICE_CONTROL_REQUEST_DIR\"\n    )\n    token = execution_plan.get(\"gpu_service_control_token\") or os.environ.get(\n        \"BROKER_GPU_SERVICE_CONTROL_TOKEN\"\n    )\n    service_id = str(service.get(\"id\") or \"\") if isinstance(service, dict) else \"\"\n    tier = str(service.get(\"tier\") or \"\") if isinstance(service, dict) else \"\"\n    category = str(failure_category or \"service_failure\")\n    if (\n        not request_dir\n        or not token\n        or not service_id\n        or tier not in {\"p40-retrieval\", \"p40-synthesis\"}\n        or category not in REPORTABLE_SERVICE_FAILURES\n    ):\n        return False\n    report_id = \"gpu-failure-\" + secrets.token_hex(12)\n    payload = {\n        \"schema\": FAILURE_REPORT_SCHEMA,\n        \"report_id\": report_id,\n        \"service_id\": service_id,\n        \"tier\": tier,\n        \"failure_category\": category,\n        \"reason\": str(reason or \"request worker reported GPU service failure\")[:4096],\n        \"reported_at\": _timestamp(),\n        \"nonce\": secrets.token_hex(16),\n    }\n    payload[\"signature\"] = failure_report_signature(token, payload)\n    try:\n        _atomic_write_json(Path(request_dir) / f\"{report_id}.failure.json\", payload)\n    except OSError:\n        return False\n    return True\n\n",
+      "rank": 2
+    },
+    {
+      "id": "ev_003",
+      "path": "broker/cmd/common/audit_startup.go",
+      "language": "go",
+      "symbol": "VerifyAuditStartup",
+      "source_refs": [
+        {
+          "path": "broker/cmd/common/audit_startup.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 10,
+          "line_end": 39,
+          "content_hash": "sha256:54219bebfd69f3d55b796b68f04965ebbdb29151a4ff29ea78c410ff70a98764"
+        }
+      ],
+      "excerpt": "\nfunc VerifyAuditStartup(logger *log.Logger, path, mode string) error {\n\tmode = strings.TrimSpace(strings.ToLower(mode))\n\tif mode == \"\" {\n\t\tmode = \"fail\"\n\t}\n\tif mode == \"off\" {\n\t\tlogger.Printf(\"audit verification skipped path=%s\", path)\n\t\treturn nil\n\t}\n\n\tresult, err := audit.VerifyFile(path)\n\tif err != nil {\n\t\treturn fmt.Errorf(\"verify audit log: %w\", err)\n\t}\n\tif result.Valid {\n\t\tlogger.Printf(\"audit verification ok path=%s events=%d last_hash=%s\", result.Path, result.EventCount, result.LastHash)\n\t\treturn nil\n\t}\n\n\tswitch mode {\n\tcase \"warn\":\n\t\tlogger.Printf(\"audit verification warning path=%s line=%d message=%s\", result.Path, result.FailureLine, result.Message)\n\t\treturn nil\n\tcase \"fail\":\n\t\treturn fmt.Errorf(\"audit verification failed path=%s line=%d message=%s\", result.Path, result.FailureLine, result.Message)\n\tdefault:\n\t\treturn fmt.Errorf(\"unsupported BROKER_AUDIT_VERIFY_MODE: %s\", mode)\n\t}\n}",
+      "rank": 3
+    },
+    {
+      "id": "ev_004",
+      "path": "broker/cmd/common/gpu_services.go",
+      "language": "go",
+      "symbol": "StartGPUServiceControlPlane",
+      "source_refs": [
+        {
+          "path": "broker/cmd/common/gpu_services.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 18,
+          "line_end": 47,
+          "content_hash": "sha256:d2f57865d5ea1adbba9acaa8b6c2bee8859f3ff0f6c179e49a4d427a1fa9c316"
+        }
+      ],
+      "excerpt": "func StartGPUServiceControlPlane(\n\tctx context.Context,\n\tcfg config.Config,\n\tbackend backends.Backend,\n\tlogger *log.Logger,\n) (*gpuservice.Manager, error) {\n\tif !cfg.GPUServiceEnabled {\n\t\treturn nil, nil\n\t}\n\tscheduler, ok := backend.(gpuservice.Scheduler)\n\tif !ok {\n\t\treturn nil, fmt.Errorf(\"GPU service control plane requires a scheduler-backed backend\")\n\t}\n\tmanager, err := gpuservice.NewManagerFromConfig(cfg, scheduler)\n\tif err != nil {\n\t\tif errors.Is(err, gpuservice.ErrControlPlaneDisabled) {\n\t\t\treturn nil, nil\n\t\t}\n\t\treturn nil, err\n\t}\n\tif logger == nil {\n\t\tlogger = log.Default()\n\t}\n\tretryInterval := time.Duration(cfg.GPUServiceHealthIntervalSeconds) * time.Second\n\tif retryInterval <= 0 {\n\t\tretryInterval = 15 * time.Second\n\t}\n\tgo runGPUServiceControlPlane(ctx, manager, logger, retryInterval)\n\treturn manager, nil\n}",
+      "rank": 4
+    },
+    {
+      "id": "ev_005",
+      "path": "broker/pkg/gpuservice/config.go",
+      "language": "go",
+      "symbol": "",
+      "source_refs": [
+        {
+          "path": "broker/pkg/gpuservice/config.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 1,
+          "line_end": 16,
+          "content_hash": "sha256:0132fa723056b54f3627c70149cab7bf1406a0c2e09e4a88b940126f287f034c"
+        }
+      ],
+      "excerpt": "package gpuservice\n\nimport (\n\t\"errors\"\n\t\"fmt\"\n\t\"strings\"\n\t\"time\"\n\n\t\"github.com/msk-mind/local-ai-broker/broker/pkg/config\"\n)\n\nvar ErrControlPlaneDisabled = errors.New(\"GPU service control plane is disabled\")\n\n// ValidateConfig validates an enabled service control plane without starting\n// scheduler jobs. Disabled configurations remain valid so existing CPU-only\n// unit tests and deployments do not need placeholder model artifacts.",
+      "rank": 5
+    },
+    {
+      "id": "ev_006",
+      "path": "workers/rag-compression/inspection_pipeline.py",
+      "language": "python",
+      "symbol": "gpu_rerank",
+      "source_refs": [
+        {
+          "path": "workers/rag-compression/inspection_pipeline.py",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 419,
+          "line_end": 486,
+          "content_hash": "sha256:9cc5e096171df8f8364b5c8dfda4419ec5a582841c2868d2ce025cf5c4f6c1d6"
+        }
+      ],
+      "excerpt": "def gpu_rerank(\n    services,\n    query,\n    candidates,\n    chunks,\n    attempts,\n    client_factory,\n    health_interval_seconds=None,\n    service_requester=None,\n    failure_reporter=None,\n):\n    initial_category = _unavailable_category(services, \"p40-retrieval\")\n    endpoint, demand_error = _resolve_or_request_endpoint(\n        services,\n        \"p40-retrieval\",\n        \"rerank\",\n        1,\n        health_interval_seconds,\n        service_requester,\n        initial_category,\n        \"GPU reranking is required for inspect_repo\",\n    )\n    if endpoint is None:\n        category = demand_error.category if demand_error is not None else initial_category\n        missing = _missing_endpoint_record(\"p40-retrieval\", 1, demand_error)\n        attempts.append(\n            _attempt(\n                missing,\n                \"rerank\",\n                \"failed\",\n                category=category,\n                reason=\"semantic_candidates_ready\",\n                detail=demand_error or \"\",\n            )\n        )\n        return candidates, \"unavailable\", None\n    chunk_by_id = {chunk[\"chunk_id\"]: chunk for chunk in chunks}\n    documents = []\n    valid_candidates = []\n    for candidate in candidates[:64]:\n        chunk = chunk_by_id.get(candidate[\"chunk_id\"])\n        if not chunk:\n            continue\n        documents.append(\n            f\"path: {chunk['path']}\\nlanguage: {chunk.get('language', '')}\\nsymbol: {chunk.get('symbol', '')}\\n\"\n            f\"lines: {chunk['line_start']}-{chunk['line_end']}\\n{chunk['content']}\"\n        )\n        valid_candidates.append(candidate)\n    if not valid_candidates:\n        attempts.append(_attempt(endpoint, \"rerank\", \"failed\", category=\"service_failure\", reason=\"no_candidates\"))\n        return candidates, \"failed\", endpoint\n    try:\n        scores = client_factory(endpoint).rerank(query, documents)\n        reranked = []\n        for candidate, score in zip(valid_candidates, scores):\n            reranked.append(dict(candidate, rerank_score=float(score)))\n        reranked.sort(key=lambda item: (-item[\"rerank_score\"], -item.get(\"rrf_score\", 0.0), item[\"chunk_id\"]))\n        for index, item in enumerate(reranked, start=1):\n            item[\"rank\"] = index\n        attempts.append(_attempt(endpoint, \"rerank\", \"succeeded\", reason=\"semantic_candidates_ready\"))\n        return reranked, \"gpu\", endpoint\n    except GPUServiceError as exc:\n        _report_warm_service_failure(failure_reporter, endpoint, exc, \"rerank\")\n        attempts.append(\n            _attempt(endpoint, \"rerank\", \"failed\", category=exc.category, reason=\"semantic_candidates_ready\", detail=exc)\n        )\n        return candidates, \"failed\", endpoint\n\n",
+      "rank": 6
+    },
+    {
+      "id": "ev_007",
+      "path": "workers/rag-compression/gpu_client.py",
+      "language": "python",
+      "symbol": "GPUServiceClient._route",
+      "source_refs": [
+        {
+          "path": "workers/rag-compression/gpu_client.py",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 281,
+          "line_end": 299,
+          "content_hash": "sha256:e13762cac968641643d1eb66a6cf73036e3b69946a69346a1ac3dbd0af2366ef"
+        }
+      ],
+      "excerpt": "    def _route(self, operation, default):\n        routes = self.record.get(\"routes\") or {}\n        configured = routes.get(operation)\n        if configured:\n            configured = str(configured)\n            if configured.startswith(\"http://\") or configured.startswith(\"https://\"):\n                base = urllib.parse.urlparse(self.base_url)\n                routed = urllib.parse.urlparse(configured)\n                if (routed.scheme, routed.hostname, routed.port) != (base.scheme, base.hostname, base.port):\n                    raise GPUServiceError(\n                        \"authentication\",\n                        \"GPU service operation route must use the registered endpoint origin\",\n                        retryable=False,\n                    )\n                return configured\n            return self.base_url + \"/\" + configured.lstrip(\"/\")\n        if self.base_url.endswith(\"/v1\"):\n            return self.base_url + \"/\" + default.removeprefix(\"v1/\")\n        return self.base_url + \"/\" + default.lstrip(\"/\")\n",
+      "rank": 7
+    },
+    {
+      "id": "ev_008",
+      "path": "broker/cmd/broker-server/main.go",
+      "language": "go",
+      "symbol": "main",
+      "source_refs": [
+        {
+          "path": "broker/cmd/broker-server/main.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 23,
+          "line_end": 100,
+          "content_hash": "sha256:99f38dc59bfa5703604ee2a5dc13a7f37c59501e635d13782adf7cba5dbfe224"
+        }
+      ],
+      "excerpt": "\nfunc main() {\n\tcfg := config.Load()\n\tlogger := log.New(os.Stdout, \"broker-server \", log.LstdFlags|log.LUTC)\n\tif err := common.VerifyAuditStartup(logger, cfg.AuditLogPath, cfg.AuditVerifyMode); err != nil {\n\t\tlogger.Fatalf(\"audit startup verification failed: %v\", err)\n\t}\n\n\tjobStore, err := store.NewFileJobStore(cfg.JobStorePath)\n\tif err != nil {\n\t\tlogger.Fatalf(\"initialize job store: %v\", err)\n\t}\n\tbackend, err := buildBackend(cfg)\n\tif err != nil {\n\t\tlogger.Fatalf(\"initialize backend: %v\", err)\n\t}\n\tauditLogger := audit.NewFileLogger(cfg.AuditLogPath)\n\tsvc := service.NewWithAuditAndOptionsAndConfig(jobStore, backend, logger, auditLogger, cfg.RunRootPath, cfg.RepoRootPath, service.Options{\n\t\tParallelMaxBatchSize:           cfg.ParallelMaxBatchSize,\n\t\tParallelMaxActiveBatches:       cfg.ParallelMaxActiveBatches,\n\t\tRootActionMaxAdditionalBatches: cfg.RootActionMaxAdditionalBatches,\n\t\tRootActionMaxRetriedShards:     cfg.RootActionMaxRetriedShards,\n\t}, &cfg)\n\tgpuContext, stopGPUControlPlane := context.WithCancel(context.Background())\n\tdefer stopGPUControlPlane()\n\tgpuManager, err := common.StartGPUServiceControlPlane(gpuContext, cfg, backend, logger)\n\tif err != nil {\n\t\tlogger.Fatalf(\"initialize GPU service control plane: %v\", err)\n\t}\n\tauthenticator, err := buildAuthenticator(cfg)\n\tif err != nil {\n\t\tlogger.Fatalf(\"initialize authenticator: %v\", err)\n\t}\n\thandler := api.NewHandlerWithAudit(svc, authenticator, cfg.AuditLogPath)\n\n\tserver := &http.Server{\n\t\tAddr:              cfg.ListenAddr,\n\t\tHandler:           handler,\n\t\tReadHeaderTimeout: 5 * time.Second,\n\t}\n\n\terrCh := make(chan error, 1)\n\tgo func() {\n\t\tlogger.Printf(\"listening on %s\", cfg.ListenAddr)\n\t\terrCh <- server.ListenAndServe()\n\t}()\n\n\tstopMaintenance := startAuditMaintenance(logger, cfg)\n\tdefer stopMaintenance()\n\n\tsigCh := make(chan os.Signal, 1)\n\tsignal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)\n\n\tselect {\n\tcase sig := <-sigCh:\n\t\tlogger.Printf(\"received signal %s, shutting down\", sig)\n\tcase err := <-errCh:\n\t\tif err != nil && err != http.ErrServerClosed {\n\t\t\tlogger.Fatalf(\"server failed: %v\", err)\n\t\t}\n\t\treturn\n\t}\n\n\tstopGPUControlPlane()\n\tif gpuManager != nil {\n\t\tcleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)\n\t\tif err := gpuManager.Shutdown(cleanupCtx); err != nil {\n\t\t\tlogger.Printf(\"GPU service shutdown cleanup failed: %v\", err)\n\t\t}\n\t\tcleanupCancel()\n\t}\n\n\tctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)\n\tdefer cancel()\n\tif err := server.Shutdown(ctx); err != nil {\n\t\tlogger.Fatalf(\"shutdown failed: %v\", err)\n\t}\n}",
+      "rank": 8
+    },
+    {
+      "id": "ev_009",
+      "path": "broker/cmd/broker-mcp/main.go",
+      "language": "go",
+      "symbol": "main",
+      "source_refs": [
+        {
+          "path": "broker/cmd/broker-mcp/main.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 20,
+          "line_end": 84,
+          "content_hash": "sha256:ebb8c851963aafaad62a764f73fbe611d49491efe8aae87d1c0d4fa6a3ae0578"
+        }
+      ],
+      "excerpt": "\nfunc main() {\n\tcfg := config.Load()\n\tlogger := log.New(os.Stderr, \"broker-mcp \", log.LstdFlags|log.LUTC)\n\tif err := common.VerifyAuditStartup(logger, cfg.AuditLogPath, cfg.AuditVerifyMode); err != nil {\n\t\tlogger.Fatalf(\"audit startup verification failed: %v\", err)\n\t}\n\n\tjobStore, err := store.NewFileJobStore(cfg.JobStorePath)\n\tif err != nil {\n\t\tlogger.Fatalf(\"initialize job store: %v\", err)\n\t}\n\n\tbackend, err := buildBackend(cfg)\n\tif err != nil {\n\t\tlogger.Fatalf(\"initialize backend: %v\", err)\n\t}\n\n\tsvc := service.NewWithAuditAndOptionsAndConfig(\n\t\tjobStore,\n\t\tbackend,\n\t\tlogger,\n\t\taudit.NewFileLogger(cfg.AuditLogPath),\n\t\tcfg.RunRootPath,\n\t\tcfg.RepoRootPath,\n\t\tservice.Options{\n\t\t\tParallelMaxBatchSize:           cfg.ParallelMaxBatchSize,\n\t\t\tParallelMaxActiveBatches:       cfg.ParallelMaxActiveBatches,\n\t\t\tRootActionMaxAdditionalBatches: cfg.RootActionMaxAdditionalBatches,\n\t\t\tRootActionMaxRetriedShards:     cfg.RootActionMaxRetriedShards,\n\t\t},\n\t\t&cfg,\n\t)\n\tgpuContext, stopGPUControlPlane := context.WithCancel(context.Background())\n\tdefer stopGPUControlPlane()\n\tgpuManager, err := common.StartGPUServiceControlPlane(gpuContext, cfg, backend, logger)\n\tif err != nil {\n\t\tlogger.Fatalf(\"initialize GPU service control plane: %v\", err)\n\t}\n\tdefer func() {\n\t\tstopGPUControlPlane()\n\t\tif gpuManager == nil {\n\t\t\treturn\n\t\t}\n\t\tcleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)\n\t\tdefer cleanupCancel()\n\t\tif err := gpuManager.Shutdown(cleanupCtx); err != nil {\n\t\t\tlogger.Printf(\"GPU service shutdown cleanup failed: %v\", err)\n\t\t}\n\t}()\n\n\tvar gpuCapabilities func(context.Context) (any, error)\n\tif gpuManager != nil {\n\t\tgpuCapabilities = func(ctx context.Context) (any, error) {\n\t\t\treturn gpuManager.Capabilities(ctx)\n\t\t}\n\t}\n\tserver := mcp.NewServerWithGPUCapabilities(svc, auth.Principal{\n\t\tActor: cfg.MCPActor,\n\t\tRole:  cfg.MCPRole,\n\t}, gpuCapabilities)\n\tif err := server.ServeStdio(context.Background(), os.Stdin, os.Stdout); err != nil {\n\t\tlogger.Fatalf(\"serve mcp: %v\", err)\n\t}\n}",
+      "rank": 9
+    },
+    {
+      "id": "ev_010",
+      "path": "workers/rag-compression/inspection_index.py",
+      "language": "python",
+      "symbol": "lexical_search",
+      "source_refs": [
+        {
+          "path": "workers/rag-compression/inspection_index.py",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 742,
+          "line_end": 861,
+          "content_hash": "sha256:5316c2934023fd3bdd8773c1a718195ee556f4e23328eed108d893a2f8886860"
+        }
+      ],
+      "excerpt": "        for path_parts in path_parts_by_path.values():\n            if any(term == part or part.startswith(term) or part.endswith(term) for part in path_parts):\n                path_term_frequency[term] += 1\n    direct_terms = {term.lower() for term in features.get(\"direct_terms\") or []}\n    redundancy_intent = bool(\n        {term.lower() for term in features[\"terms\"]}\n        & {\"dry\", \"duplicate\", \"duplicat\", \"duplication\", \"redundancy\", \"repeat\", \"repeated\"}\n    )\n    symbol_counts_by_file = defaultdict(int)\n    symbol_files = defaultdict(set)\n    for candidate in chunks:\n        normalized_symbol = str(candidate.get(\"symbol\") or \"\").strip().lower()\n        if not normalized_symbol:\n            continue\n        symbol_counts_by_file[(candidate[\"path\"], normalized_symbol)] += 1\n        symbol_files[normalized_symbol].add(candidate[\"path\"])\n    if fts:\n        try:\n            with sqlite3.connect(index_path) as conn:\n                rows = conn.execute(\n                    \"SELECT chunk_id, bm25(chunks_fts, 8.0, 6.0, 1.0) AS score \"\n                    \"FROM chunks_fts WHERE chunks_fts MATCH ? ORDER BY score LIMIT ?\",\n                    (fts, max(limit * 2, 64)),\n                ).fetchall()\n            for rank, (chunk_id, bm25_score) in enumerate(rows, start=1):\n                raw_scores[chunk_id] += 1.0 / rank\n                raw_scores[chunk_id] += 1.0 / (1.0 + abs(float(bm25_score)))\n        except sqlite3.Error:\n            pass\n\n    # FTS tokenization is complemented by exact path, phrase, and identifier matches.\n    for chunk in chunks:\n        content = chunk[\"content\"]\n        content_lower = content.lower()\n        path_lower = chunk[\"path\"].lower()\n        path_parts = path_parts_by_path.get(chunk[\"path\"], set())\n        symbol_lower = chunk.get(\"symbol\", \"\").lower()\n        score = (\n            raw_scores[chunk[\"chunk_id\"]]\n            + file_coverage_bonus.get(chunk[\"path\"], 0.0)\n            + directory_coverage_bonus.get(chunk[\"path\"], 0.0)\n        )\n        if redundancy_intent and symbol_lower:\n            same_file_count = symbol_counts_by_file[(chunk[\"path\"], symbol_lower)]\n            cross_file_count = len(symbol_files[symbol_lower])\n            score += min(\n                80.0,\n                (10.0 * math.log2(1 + same_file_count)) + (3.0 * max(0, cross_file_count - 1)),\n            )\n        explicit_path_match = False\n        for term in lexical_terms:\n            occurrences = min(3, content_lower.count(term) + symbol_lower.count(term))\n            if not occurrences:\n                continue\n            inverse_frequency = math.log((corpus_size + 1) / (term_document_frequency[term] + 1)) + 1.0\n            score += inverse_frequency * (1.0 + (occurrences - 1) * 0.25)\n        for phrase in features[\"quoted\"]:\n            if phrase.lower() in content_lower:\n                score += 4.0\n        for named_path in features[\"paths\"]:\n            if named_path.lower().split(\":\", 1)[0] in path_lower:\n                score += 5.0\n                explicit_path_match = True\n        for identifier in features[\"identifiers\"]:\n            lowered = identifier.lower()\n            if lowered == symbol_lower:\n                score += 5.0\n            elif lowered in content_lower:\n                score += 2.0\n        # Path components are first-class retrieval evidence.  This helps\n        # subsystem and module names without encoding any canned question.\n        common_path_terms = {\n            \"broker\",\n            \"code\",\n            \"gpu\",\n            \"inspect\",\n            \"inspection\",\n            \"main\",\n            \"model\",\n            \"repo\",\n            \"repository\",\n            \"service\",\n            \"worker\",\n        }\n        path_boost = 0.0\n        for term in features[\"terms\"]:\n            lowered_term = term.lower()\n            if len(lowered_term) < 3:\n                continue\n            if any(\n                lowered_term == part\n                or part.startswith(lowered_term)\n                or part.endswith(lowered_term)\n                for part in path_parts\n            ):\n                if lowered_term in common_path_terms:\n                    path_boost += 0.75\n                else:\n                    inverse_path_frequency = math.log(\n                        (file_count + 1) / (path_term_frequency.get(lowered_term, 0) + 1)\n                    ) + 1.0\n                    base_weight = 22.0 if lowered_term in direct_terms else 9.0\n                    path_boost += min(60.0, base_weight * inverse_path_frequency)\n        score += path_boost\n        is_test_or_fixture = (\n            path_lower.startswith(\"tests/\")\n            or \"/tests/\" in path_lower\n            or path_lower.endswith(\"_test.go\")\n            or Path(path_lower).name.startswith(\"test_\")\n            or Path(path_lower).name.endswith(\"_test.py\")\n            or \"fixture\" in path_parts\n            or \"fixtures\" in path_parts\n            or \"golden\" in path_parts\n        )\n        is_documentation = (\n            path_lower.startswith(\"docs/\")\n            or Path(path_lower).name.startswith(\"readme\")\n            or chunk.get(\"language\") == \"markdown\"\n        )\n        explicit_test_intent = bool(",
+      "rank": 10
+    },
+    {
+      "id": "ev_011",
+      "path": "broker/pkg/config/config.go",
+      "language": "go",
+      "symbol": "Load",
+      "source_refs": [
+        {
+          "path": "broker/pkg/config/config.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 128,
+          "line_end": 205,
+          "content_hash": "sha256:30e5dffc09cdcd49f5f95d343d650191b051338180a39387ce75717b04b1bf32"
+        }
+      ],
+      "excerpt": "\nfunc Load() Config {\n\tcfg := Config{\n\t\tListenAddr:                        envOrDefault(\"BROKER_LISTEN_ADDR\", \":8081\"),\n\t\tJobStorePath:                      envOrDefault(\"BROKER_JOB_STORE_PATH\", \".broker/jobs.json\"),\n\t\tRunRootPath:                       envOrDefault(\"BROKER_RUN_ROOT_PATH\", \".broker/runs\"),\n\t\tRepoRootPath:                      envOrDefault(\"BROKER_REPO_ROOT_PATH\", \".\"),\n\t\tAuditLogPath:                      envOrDefault(\"BROKER_AUDIT_LOG_PATH\", \".broker/audit.jsonl\"),\n\t\tAuditVerifyMode:                   envOrDefault(\"BROKER_AUDIT_VERIFY_MODE\", \"fail\"),\n\t\tAuditRotateBytes:                  envOrDefaultInt64(\"BROKER_AUDIT_ROTATE_BYTES\", 10*1024*1024),\n\t\tAuditKeepArchives:                 envOrDefaultInt(\"BROKER_AUDIT_KEEP_ARCHIVES\", 10),\n\t\tAuditMaintainIntervalSeconds:      envOrDefaultInt(\"BROKER_AUDIT_MAINTAIN_INTERVAL_SECONDS\", 300),\n\t\tAuthMode:                          envOrDefault(\"BROKER_AUTH_MODE\", \"header\"),\n\t\tStaticTokens:                      envOrDefault(\"BROKER_STATIC_TOKENS\", \"\"),\n\t\tMCPActor:                          envOrDefault(\"BROKER_MCP_ACTOR\", \"\"),\n\t\tMCPRole:                           envOrDefault(\"BROKER_MCP_ROLE\", \"user\"),\n\t\tBackendKind:                       envOrDefault(\"BROKER_BACKEND\", \"slurm\"),\n\t\tSlurmMode:                         envOrDefault(\"BROKER_SLURM_MODE\", \"stub\"),\n\t\tSlurmSubmitCmd:                    envOrDefault(\"BROKER_SLURM_SUBMIT_CMD\", \"sbatch\"),\n\t\tSlurmStatusCmd:                    envOrDefault(\"BROKER_SLURM_STATUS_CMD\", \"sacct\"),\n\t\tSlurmCancelCmd:                    envOrDefault(\"BROKER_SLURM_CANCEL_CMD\", \"scancel\"),\n\t\tSlurmInfoCmd:                      envOrDefault(\"BROKER_SLURM_INFO_CMD\", \"sinfo\"),\n\t\tSlurmScriptPath:                   envOrDefault(\"BROKER_SLURM_SCRIPT_PATH\", \"deploy/slurm/broker_worker.slurm\"),\n\t\tSlurmPartitionCPU:                 envOrDefault(\"BROKER_SLURM_PARTITION_CPU\", \"\"),\n\t\tSlurmPartitionGPU:...",
+      "rank": 11
+    },
+    {
+      "id": "ev_012",
+      "path": "cmd/local-ai-broker/main.go",
+      "language": "go",
+      "symbol": "loadBootstrapConfig",
+      "source_refs": [
+        {
+          "path": "cmd/local-ai-broker/main.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 856,
+          "line_end": 956,
+          "content_hash": "sha256:9cf1df11f2eebc6a886ef1c31af4c97cf7f3007181571bbcad6900856a3c85ae"
+        }
+      ],
+      "excerpt": "\nfunc loadBootstrapConfig(repoRoot, path string) (map[string]string, error) {\n\tcontent, err := os.ReadFile(path)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tvar cfg bootstrapConfig\n\tif err := json.Unmarshal(content, &cfg); err != nil {\n\t\treturn nil, fmt.Errorf(\"parse config JSON: %w\", err)\n\t}\n\tconfigDir := filepath.Dir(path)\n\tenvMap := map[string]string{}\n\tset := func(key, value string, pathLike bool) {\n\t\tif value == \"\" {\n\t\t\treturn\n\t\t}\n\t\tif pathLike {\n\t\t\tvalue = resolveConfigPath(repoRoot, configDir, value)\n\t\t}\n\t\tenvMap[key] = value\n\t}\n\tset(\"BROKER_LISTEN_ADDR\", cfg.ListenAddr, false)\n\tset(\"BROKER_JOB_STORE_PATH\", cfg.JobStorePath, true)\n\tset(\"BROKER_RUN_ROOT_PATH\", cfg.RunRootPath, true)\n\tset(\"BROKER_REPO_ROOT_PATH\", cfg.RepoRootPath, true)\n\tset(\"BROKER_AUDIT_LOG_PATH\", cfg.AuditLogPath, true)\n\tset(\"BROKER_AUDIT_VERIFY_MODE\", cfg.AuditVerifyMode, false)\n\tset(\"BROKER_AUTH_MODE\", cfg.AuthMode, false)\n\tset(\"BROKER_MCP_ACTOR\", cfg.MCPActor, false)\n\tset(\"BROKER_MCP_ROLE\", cfg.MCPRole, false)\n\tset(\"BROKER_BACKEND\", cfg.Backend, false)\n\tset(\"BROKER_LOCAL_MODE\", cfg.Local.Mode, false)\n\tset(\"BROKER_LOCAL_SCRIPT_PATH\", cfg.Local.ScriptPath, true)\n\tset(\"BROKER_SLURM_MODE\", cfg.Slurm.Mode, false)\n\tset(\"BROKER_SLURM_SUBMIT_CMD\", cfg.Slurm.SubmitCmd, false)\n\tset(\"BROKER_SLURM_STATUS_CMD\", cfg.Slurm.StatusCmd, false)\n\tset(\"BROKER_SLURM_CANCEL_CMD\", cfg.Slurm.CancelCmd, false)\n\tset(\"BROKER_SLURM_INFO_CMD\", cfg.Slurm.InfoCmd, false)\n\tset(\"BROKER_SLURM_SCRIPT_PATH\", cfg.Slurm.ScriptPath, true)\n\tset(\"BROKER_SLURM_PARTITION_CPU\", cfg.Slurm.PartitionCPU, false)\n\tset(\"BROKER_SLURM_PARTITION_GPU\", cfg.Slurm.PartitionGPU, false)\n\tset(\"BROKER_SLURM_PARTITION_P40\", cfg.Slurm.PartitionP40, false)\n\tset(\"BROKER_SLURM_PARTITION_V100\", cfg.Slurm.PartitionV100, false)\n\tset(\"BROKER_SLURM_PARTITION_A100\", cfg.Slurm.PartitionA100, false)\n\tset(\"BROKER_SLURM_GPU_REQUEST_MODE\", cfg.Slurm.GPURequestMode, false)\n\tset(\"BROKER_SLURM_GPU_TYPE_P40\", cfg.Slurm.GPUTypeP40, false)\n\tset(\"BROKER_SLURM_GPU_TYPE_V100\", cfg.Slurm.GPUTypeV100, false)\n\tset(\"BROKER_SLURM_GPU_TYPE_A100\", cfg.Slurm.GPUTypeA100, false)\n\tset(\"BROKER_SLURM_NODELIST_CPU\", cfg.Slurm.NodeListCPU, false)\n\tset(\"BROKER_SLURM_NODELIST_P40\", cfg.Slurm.NodeListP40, false)\n\tset(\"BROKER_SLURM_NODELIST_V100\", cfg.Slurm.NodeListV100, false)\n\tset(\"BROKER_SLURM_NODELIST_A100\", cfg.Slurm.NodeListA100, false)\n\tset(\"BROKER_SLURM_CONSTRAINT_CPU\", cfg.Slurm.ConstraintCPU, false)\n\tset(\"BROKER_SLURM_CONSTRAINT_P40\", cfg.Slurm.ConstraintP40, false)\n\tset(\"BROKER_SLURM_CONSTRAINT_V100\", cfg.Slurm.ConstraintV100, false)\n\tset(\"BROKER_SLURM_CONSTRAINT_A100\", cfg.Slurm.ConstraintA100, false)\n\tset(\"BROKER_MODEL_PROFILE_CPU\", cfg.Slurm.ModelCPU, false)\n\tset(\"BROKER_MODEL_PROFILE_P40\", cfg.Slurm.ModelP40, false)\n\tset(\"BROKER_MODEL_PROFILE_A100\", cfg.Slurm.ModelA100, false)\n\tif cfg.GPUServices.Enabled {\n\t\tenvMap[\"BROKER_GPU_SERVICE_ENABLED\"] = \"true\"\n\t}\n\tset(\"BROKER_GPU_SERVICE_REGISTRY_PATH\", cfg.GPUServices.RegistryPath, true)\n\tset(\"BROKER_GPU_SERVICE_CONTROL_TOKEN\", cfg.GPUServices.ControlToken, false)\n\tset(\"BROKER_GPU_SERVICE_CONTROL_REQUEST_DIR\", cfg.GPUServices.ControlRequestDir, true)\n\tset(\"BROKER_GPU_SERVICE_SCRIPT_PATH\", cfg.GPUServices.ScriptPath, true)\n\tsetPositiveIntEnv(envMap, \"BROKER_GPU_SERVICE_LEASE_DURATION_SECONDS\", cfg.GPUServices.LeaseDurationSeconds)\n\tsetPositiveIntEnv(envMap, \"BROKER_GPU_SERVICE_HEALTH_INTERVAL_SECONDS\", cfg.GPUServices.HealthIntervalSeconds)\n\tsetPositiveIntEnv(envMap, \"BROKER_GPU_SERVICE_HEARTBEAT_TIMEOUT_SECONDS\", cfg.GPUServices.HeartbeatTimeoutSeconds)\n\tsetPositiveIntEnv(envMap, \"BROKER_GPU_SERVICE_STARTUP_TIMEOUT_SECONDS\", cfg.GPUServices.StartupTimeoutSeconds)\n\tsetGPUServiceDeploymentEnv(envMap, \"P40_RETRIEVAL\", cfg.GPUServices.P40Retrieval)\n\tsetGPUServiceDeploymentEnv(envMap, \"P40_SYNTHESIS\", cfg.GPUServices.P40Synthesis)\n\tsetGPUServiceDeploymentEnv(envMap, \"V100_REASONING\", cfg.GPUServices.V100Reasoning)\n\tsetGPUServiceDeploymentEnv(envMap, \"A100_SINGLE\", cfg.GPUServices.A100Single)\n\tsetGPUServiceDeploymentEnv(envMap, \"A100_MULTIGPU\", cfg.GPUServices.A100Multigpu)\n\tset(\"BROKER_RUNTIME_LLAMACPP_BASE_URL\", cfg.Runtime.LlamaCPPBaseURL, false)\n\tset(\"BROKER_RUNTIME_VLLM_BASE_URL\", cfg.Runtime.VLLMBaseURL, false)\n\tset(\"BROKER_RUNTIME_SGLANG_BASE_URL\", cfg.Runtime.SGLangBaseURL, false)\n\tif cfg.Runtime.LlamaCPPTimeoutSeconds > 0 {\n\t\tenvMap[\"BROKER_RUNTIME_LLAMACPP_TIMEOUT_SECONDS\"] = fmt.Sprintf(\"%d\", cfg.Runtime.LlamaCPPTimeoutSeconds)\n\t}\n\tif cfg.Runtime.VLLMTimeoutSeconds > 0 {\n\t\tenvMap[\"BROKER_RUNTIME_VLLM_TIMEOUT_SECONDS\"] = fmt.Sprintf(\"%d\", cfg.Runtime.VLLMTimeoutSeconds)\n\t}\n\tif cfg.Runtime.SGLangTimeoutSeconds > 0 {\n\t\tenvMap[\"BROKER_RUNTIME_SGLANG_TIMEOUT_SECONDS\"] = fmt.Sprintf(\"%d\", cfg.Runtime.SGLangTimeoutSeconds)\n\t}\n\tif cfg.Parallel.MaxBatchSize > 0 {\n\t\tenvMap[\"BROKER_PARALLEL_MAX_BATCH_SIZE\"] = fmt.Sprintf(\"%d\", cfg.Parallel.MaxBatchSize)\n\t}\n\tif cfg.Parallel.MaxActiveBatches > 0 {\n\t\tenvMap[\"BROKER_PARALLEL_MAX_ACTIVE_BATCHES\"] = fmt.Sprintf(\"%d\", cfg.Parallel.MaxActiveBatches)\n\t}\n\tif cfg.Parallel.MaxAdditionalBatches > 0 {\n\t\tenvMap[\"BROKER_ROOT_ACTION_MAX_ADDITIONAL_BATCHES\"] = fmt.Sprintf(\"%d\", cfg.Parallel.MaxAdditionalBatches)\n\t}\n\tif cfg.Parallel.MaxRetriedShards > 0 {\n\t\tenvMap[\"BROKER_ROOT_ACTION_MAX_RETRIED_SHARDS\"] = fmt.Sprintf(\"%d\", cfg.Parallel.MaxRetriedShards)\n\t}\n\treturn envMap, nil\n}",
+      "rank": 12
+    }
+  ]
+}

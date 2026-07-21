@@ -1,0 +1,1 @@
+{"job_id": "job_run1", "task_type": "inspect_repo", "task_params": {"query": "Where is the GPU service control plane started for the broker transports?", "mode": "evidence", "exclude_dirs": ["tests/acceptance"]}, "constraints": {}, "execution_profile": {"tier": "cpu-rag-indexing", "runtime": "deterministic"}, "output_schema": {"name": "repo_inspection_v2"}}

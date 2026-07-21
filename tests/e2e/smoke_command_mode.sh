@@ -23,6 +23,12 @@ export BROKER_SLURM_SUBMIT_CMD="sbatch"
 export BROKER_SLURM_STATUS_CMD="sacct"
 export BROKER_SLURM_CANCEL_CMD="scancel"
 export BROKER_SLURM_SCRIPT_PATH="${REPO_ROOT}/deploy/slurm/broker_worker.slurm"
+GO_BIN="${GO_BIN:-$(command -v go)}"
+CGO_ENABLED="${CGO_ENABLED:-0}"
+if [ -z "${GO_BIN}" ]; then
+  echo "go not found on PATH" >&2
+  exit 1
+fi
 
 INPUT_FILE="${BASE_DIR}/source.txt"
 cat > "${INPUT_FILE}" <<'EOF'
@@ -50,9 +56,9 @@ SUBMIT_PAYLOAD="$(cat <<EOF
 EOF
 )"
 
-SUBMIT_RESPONSE="$(env -u GOROOT GOCACHE=/tmp/local-ai-broker-gocache GOPATH=/tmp/local-ai-broker-gopath \
+SUBMIT_RESPONSE="$(env -u GOROOT CGO_ENABLED="${CGO_ENABLED}" GOCACHE=/tmp/local-ai-broker-gocache GOPATH=/tmp/local-ai-broker-gopath \
   BROKER_BASE_URL="http://${BROKER_LISTEN_ADDR}" \
-  /usr/bin/go run "${REPO_ROOT}/broker/cmd/broker-cli" submit \
+  "${GO_BIN}" run "${REPO_ROOT}/broker/cmd/broker-cli" submit \
     --task-type document_summary \
     --input-uri "file://${INPUT_FILE}" \
     --schema document_summary_v1)"
@@ -62,6 +68,6 @@ echo "Submitted job: ${JOB_ID}"
 
 wait_for_job_state "${BROKER_LISTEN_ADDR}" "${JOB_ID}" >/dev/null
 
-env -u GOROOT GOCACHE=/tmp/local-ai-broker-gocache GOPATH=/tmp/local-ai-broker-gopath \
+env -u GOROOT CGO_ENABLED="${CGO_ENABLED}" GOCACHE=/tmp/local-ai-broker-gocache GOPATH=/tmp/local-ai-broker-gopath \
   BROKER_BASE_URL="http://${BROKER_LISTEN_ADDR}" \
-  /usr/bin/go run "${REPO_ROOT}/broker/cmd/broker-cli" result "${JOB_ID}"
+  "${GO_BIN}" run "${REPO_ROOT}/broker/cmd/broker-cli" result "${JOB_ID}"

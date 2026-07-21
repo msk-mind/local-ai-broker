@@ -158,15 +158,26 @@ Expected payload shape:
 - `evidence`
 - `warnings`
 
-### `repo_inspection_pack_v1`
+### `repo_inspection_v2`
 
-Expected payload shape:
+`inspect_repo` requires a non-empty query of at most 2,048 UTF-8 bytes. An explicitly set `final_pack_token_budget` must be at least 2,048 tokens. `mode` is `auto` (default),
+`evidence`, or `answer`. The schema version is `2.0.0` and the payload contains:
 
-- `summary`
-- `areas_of_interest`
-- `key_files`
+- `mode`
+- `query`
+- optional `answer`
+- `findings`
 - `evidence`
+- `quality`
 - `warnings`
+- `provenance`
+- compact `retrieval` and `runtime` diagnostics
+
+An evidence-only result omits `answer`, has no synthesized findings, and sets
+`quality.result=evidence_only`. An answer-ready result is valid only when
+retrieval, reranking, and synthesis are all recorded as GPU-backed and every
+finding references an ID in the released evidence. In `answer` mode, exhausted
+GPU tiers produce a failed result with the complete tier-attempt history.
 
 ### `patch_proposal_pack_v1`
 

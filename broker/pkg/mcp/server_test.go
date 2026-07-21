@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/msk-mind/local-ai-broker/broker/pkg/config"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/service"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/store"
+	"github.com/msk-mind/local-ai-broker/broker/pkg/tasks"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/types"
 )
 
@@ -76,6 +78,155 @@ func TestSubmitToolCall(t *testing.T) {
 	result := resp.Result.(map[string]any)
 	if _, ok := result["structuredContent"]; !ok {
 		t.Fatal("expected structuredContent")
+	}
+}
+
+func TestSubmitAndMaybeWaitUsesInlineReleasedResult(t *testing.T) {
+	server := &Server{}
+	args := mustRawJSON(t, `{"wait_for_result": true}`)
+	expected := types.JobResultRelease{
+		JobID:  "job_cached",
+		State:  types.JobStateSucceeded,
+		Result: &types.Result{SchemaName: "document_summary_v1", Payload: map[string]any{"summary": "cached"}},
+	}
+
+	result, err := server.submitAndMaybeWait(context.Background(), args, "submit_local_job", func(context.Context) (types.SubmitJobResponse, error) {
+		return types.SubmitJobResponse{
+			JobID:          "job_cached",
+			State:          types.JobStateSucceeded,
+			ReleasedResult: &expected,
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	release := result["structuredContent"].(types.JobResultRelease)
+	if release.JobID != expected.JobID || release.Result == nil || release.Result.Payload["summary"] != "cached" {
+		t.Fatalf("expected inline released result, got %#v", release)
+	}
+}
+
+func TestSubmitToolCallWaitForResultReturnsReleasedResult(t *testing.T) {
+	runRoot := t.TempDir()
+	svc := service.New(
+		store.NewMemoryJobStore(),
+		&waitForResultBackend{runRoot: runRoot, delay: 20 * time.Millisecond},
+		log.New(io.Discard, "", 0),
+		runRoot,
+		".",
+	)
+	server := NewServer(svc, mcpTestPrincipal())
+
+	params := map[string]any{
+		"name": "submit_local_job",
+		"arguments": map[string]any{
+			"task_type": "document_summary",
+			"input_refs": []map[string]any{
+				{"type": "file", "uri": "file:///tmp/does-not-exist.txt"},
+			},
+			"output_schema":    map[string]any{"name": "document_summary_v1"},
+			"wait_for_result":  true,
+			"max_wait_seconds": 2,
+			"poll_interval_ms": 10,
+		},
+	}
+	paramBytes, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+	resp := server.handleRequest(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "tools/call",
+		Params:  paramBytes,
+	})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+	release := resp.Result.(map[string]any)["structuredContent"].(types.JobResultRelease)
+	if release.State != types.JobStateSucceeded {
+		t.Fatalf("expected succeeded release, got %#v", release)
+	}
+	if release.Result == nil || release.Result.Payload["summary"] != "waited summary" {
+		t.Fatalf("expected released result payload, got %#v", release)
+	}
+}
+
+func TestSubmitToolCallWaitForResultReturnsDirectReleasedResultBeforeTerminalState(t *testing.T) {
+	runRoot := t.TempDir()
+	svc := service.New(
+		store.NewMemoryJobStore(),
+		&localInspectRepoEarlyResultBackend{runRoot: runRoot, delay: 20 * time.Millisecond},
+		log.New(io.Discard, "", 0),
+		runRoot,
+		".",
+	)
+	server := NewServer(svc, mcpTestPrincipal())
+
+	resp := server.handleRequest(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "tools/call",
+		Params: mustRawJSON(t, `{
+		  "name": "inspect_repo",
+		  "arguments": {
+		    "query": "trace inspect_repo timeout handling",
+		    "mode": "evidence",
+		    "input_refs": [{"type": "repo", "uri": "file:///tmp/repo"}],
+		    "wait_for_result": true,
+		    "max_wait_seconds": 2,
+		    "poll_interval_ms": 10
+		  }
+		}`),
+	})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %v", resp.Error)
+	}
+	release := resp.Result.(map[string]any)["structuredContent"].(types.JobResultRelease)
+	if release.State != types.JobStateSucceeded {
+		t.Fatalf("expected succeeded release, got %#v", release)
+	}
+	if release.Result == nil || release.Result.SchemaName != "repo_inspection_v2" {
+		t.Fatalf("expected inspect_repo released result, got %#v", release)
+	}
+	payload := release.Result.Payload
+	if payload["mode"] != "evidence" {
+		t.Fatalf("expected evidence mode payload, got %#v", payload)
+	}
+}
+
+func TestSubmitToolCallWaitForResultTimeout(t *testing.T) {
+	runRoot := t.TempDir()
+	svc := service.New(
+		store.NewMemoryJobStore(),
+		&queuedOnlyBackend{},
+		log.New(io.Discard, "", 0),
+		runRoot,
+		".",
+	)
+	server := NewServer(svc, mcpTestPrincipal())
+
+	resp := server.handleRequest(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "tools/call",
+		Params: mustRawJSON(t, `{
+		  "name": "submit_local_job",
+		  "arguments": {
+		    "task_type": "document_summary",
+		    "input_refs": [{"type": "file", "uri": "file:///tmp/does-not-exist.txt"}],
+		    "output_schema": {"name": "document_summary_v1"},
+		    "wait_for_result": true,
+		    "max_wait_seconds": 1,
+		    "poll_interval_ms": 10
+		  }
+		}`),
+	})
+	if resp.Error == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(resp.Error.Message, "timed out waiting for job") {
+		t.Fatalf("expected timeout message, got %#v", resp.Error)
 	}
 }
 
@@ -192,6 +343,104 @@ func TestListLocalCapabilitiesToolCall(t *testing.T) {
 	if orchestration["independent_parallel_jobs"] != true {
 		t.Fatalf("expected independent_parallel_jobs=true, got %#v", orchestration)
 	}
+	gpuServices := structured["gpu_services"].(map[string]any)
+	if gpuServices["enabled"] != false {
+		t.Fatalf("expected disabled GPU service snapshot in unit server, got %#v", gpuServices)
+	}
+	tiers := gpuServices["tiers"].([]map[string]any)
+	if len(tiers) != 5 {
+		t.Fatalf("expected all five GPU service tiers, got %#v", tiers)
+	}
+}
+
+func TestListLocalCapabilitiesUsesLiveGPUProvider(t *testing.T) {
+	base := newTestServer()
+	server := NewServerWithGPUCapabilities(base.service, mcpTestPrincipal(), func(context.Context) (any, error) {
+		return map[string]any{
+			"enabled": true,
+			"healthy": true,
+			"tiers": []map[string]any{{
+				"tier": "p40-retrieval", "active_replicas": 1,
+				"queue_state": map[string]int{"running": 1},
+				"endpoints":   []map[string]any{{"id": "gpu-p40-1", "healthy": true}},
+			}},
+		}, nil
+	})
+	server.setSessionPrincipal(mcpTestPrincipal())
+	result, err := server.callTool(context.Background(), toolsCallParams{
+		Name: "list_local_capabilities", Arguments: mustRawJSON(t, `{}`),
+	})
+	if err != nil {
+		t.Fatalf("list capabilities: %v", err)
+	}
+	structured := result["structuredContent"].(map[string]any)
+	gpuServices := structured["gpu_services"].(map[string]any)
+	if gpuServices["enabled"] != true || gpuServices["healthy"] != true {
+		t.Fatalf("expected live GPU snapshot, got %#v", gpuServices)
+	}
+}
+
+func TestInspectRepoToolPublishesV2Contract(t *testing.T) {
+	var inspect map[string]any
+	for _, definition := range toolDefinitions() {
+		if definition["name"] == "inspect_repo" {
+			inspect = definition
+			break
+		}
+	}
+	if inspect == nil {
+		t.Fatal("inspect_repo tool definition not found")
+	}
+	schema := inspect["inputSchema"].(map[string]any)
+	required := schema["required"].([]string)
+	if !containsString(required, "query") || !containsString(required, "input_refs") {
+		t.Fatalf("inspect_repo must require query and input_refs: %#v", required)
+	}
+	properties := schema["properties"].(map[string]any)
+	query := properties["query"].(map[string]any)
+	if query["maxLength"] != tasks.MaxInspectRepoQueryBytes {
+		t.Fatalf("unexpected inspect_repo query limit: %#v", query)
+	}
+	mode := properties["mode"].(map[string]any)
+	if mode["default"] != "auto" {
+		t.Fatalf("expected auto default mode, got %#v", mode)
+	}
+	constraints := properties["constraints"].(map[string]any)["properties"].(map[string]any)
+	for _, key := range []string{
+		"retrieval_token_budget", "evidence_token_budget", "final_pack_token_budget", "synthesis_context_token_budget",
+	} {
+		if _, ok := constraints[key]; !ok {
+			t.Fatalf("missing token-explicit constraint %q: %#v", key, constraints)
+		}
+	}
+	if _, exists := constraints["retrieved_chunk_budget"]; exists {
+		t.Fatalf("legacy ambiguous budget must not be advertised: %#v", constraints)
+	}
+	finalPack := constraints["final_pack_token_budget"].(map[string]any)
+	if finalPack["minimum"] != tasks.MinInspectRepoFinalPackTokens {
+		t.Fatalf("unexpected inspect_repo final pack minimum: %#v", finalPack)
+	}
+	profile := properties["execution_profile"].(map[string]any)["properties"].(map[string]any)
+	tiers := profile["tier"].(map[string]any)["enum"].([]string)
+	for _, tier := range []string{"p40-retrieval", "p40-synthesis", "v100-reasoning", "a100-single", "a100-multigpu"} {
+		if !containsString(tiers, tier) {
+			t.Fatalf("missing GPU tier %q: %#v", tier, tiers)
+		}
+	}
+	for _, legacyTier := range []string{"p40-rag-compression", "a100-reasoning"} {
+		if !containsString(tiers, legacyTier) {
+			t.Fatalf("shared RAG profile schema lost compatibility tier %q: %#v", legacyTier, tiers)
+		}
+	}
+}
+
+func containsString(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRAGCompressToolCall(t *testing.T) {
@@ -285,6 +534,49 @@ func TestRAGCompressToolCallPreservesQuery(t *testing.T) {
 	if strategies, ok := job.Request.TaskParams["retrieval_strategies"].([]any); ok && len(strategies) == 2 {
 	} else {
 		t.Fatalf("expected normalized retrieval strategies, got %#v", job.Request.TaskParams)
+	}
+}
+
+func TestInspectRepoToolCallUsesV2OutputSchema(t *testing.T) {
+	server := newTestServer()
+	server.setSessionPrincipal(mcpTestPrincipal())
+
+	resp := server.handleRequest(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      1,
+		Method:  "tools/call",
+		Params: mustRawJSON(t, `{
+		  "name": "inspect_repo",
+		  "arguments": {
+		    "query": "trace inspect_repo timeout handling",
+		    "mode": "answer",
+		    "input_refs": [{"type": "repo", "uri": "file:///tmp/repo"}]
+		  }
+		}`),
+	})
+	if resp.Error != nil {
+		t.Fatalf("unexpected inspect_repo error: %v", resp.Error)
+	}
+	submit := resp.Result.(map[string]any)["structuredContent"].(types.SubmitJobResponse)
+
+	statusResp := server.handleRequest(context.Background(), request{
+		JSONRPC: "2.0",
+		ID:      2,
+		Method:  "tools/call",
+		Params: mustRawJSON(t, fmt.Sprintf(`{
+		  "name": "get_job_status",
+		  "arguments": {"job_id": %q}
+		}`, submit.JobID)),
+	})
+	if statusResp.Error != nil {
+		t.Fatalf("unexpected status error: %v", statusResp.Error)
+	}
+	job := statusResp.Result.(map[string]any)["structuredContent"].(types.Job)
+	if job.Request.OutputSchema.Name != "repo_inspection_v2" {
+		t.Fatalf("expected inspect_repo output schema repo_inspection_v2, got %#v", job.Request.OutputSchema)
+	}
+	if job.Request.TaskParams["mode"] != "answer" || job.Request.TaskParams["query"] != "trace inspect_repo timeout handling" {
+		t.Fatalf("expected normalized inspect_repo task params, got %#v", job.Request.TaskParams)
 	}
 }
 
@@ -1127,6 +1419,155 @@ func decodeFramedResponses(t *testing.T, payload []byte) [][]byte {
 type mcpTestBatchBackend struct {
 	status backends.RunStatus
 }
+
+type waitForResultBackend struct {
+	runRoot  string
+	delay    time.Duration
+	mu       sync.Mutex
+	complete map[string]bool
+}
+
+func (b *waitForResultBackend) Name() string { return "waitable" }
+
+func (b *waitForResultBackend) SubmitRun(_ context.Context, job types.Job) (backends.SubmitResponse, error) {
+	b.mu.Lock()
+	if b.complete == nil {
+		b.complete = make(map[string]bool)
+	}
+	b.complete[job.ID] = false
+	b.mu.Unlock()
+
+	go func() {
+		time.Sleep(b.delay)
+		jobDir := filepath.Join(b.runRoot, job.ID)
+		_ = os.MkdirAll(jobDir, 0o755)
+		_ = os.WriteFile(filepath.Join(jobDir, "result.json"), []byte(`{
+  "schema_name": "document_summary_v1",
+  "schema_version": "1.0.0",
+  "payload": {
+    "summary": "waited summary"
+  }
+}`), 0o644)
+		_ = os.WriteFile(filepath.Join(jobDir, "artifacts.json"), []byte(`[]`), 0o644)
+		b.mu.Lock()
+		b.complete[job.ID] = true
+		b.mu.Unlock()
+	}()
+
+	return backends.SubmitResponse{
+		BackendKind:  "waitable",
+		BackendRunID: job.ID,
+		InitialState: types.JobStateQueued,
+	}, nil
+}
+
+func (b *waitForResultBackend) GetRun(_ context.Context, backendRunID string) (backends.RunStatus, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.complete[backendRunID] {
+		return backends.RunStatus{State: types.JobStateSucceeded, RawState: "COMPLETED", ExitCode: "0:0"}, nil
+	}
+	return backends.RunStatus{State: types.JobStateQueued, RawState: "PENDING"}, nil
+}
+
+func (b *waitForResultBackend) CancelRun(context.Context, string) error { return nil }
+
+type localInspectRepoEarlyResultBackend struct {
+	runRoot  string
+	delay    time.Duration
+	mu       sync.Mutex
+	complete map[string]bool
+}
+
+func (b *localInspectRepoEarlyResultBackend) Name() string { return "local-inspect-repo-early-result" }
+
+func (b *localInspectRepoEarlyResultBackend) SubmitRun(_ context.Context, job types.Job) (backends.SubmitResponse, error) {
+	b.mu.Lock()
+	if b.complete == nil {
+		b.complete = make(map[string]bool)
+	}
+	b.complete[job.ID] = false
+	b.mu.Unlock()
+
+	go func() {
+		time.Sleep(b.delay)
+		jobDir := filepath.Join(b.runRoot, job.ID)
+		_ = os.MkdirAll(jobDir, 0o755)
+		_ = os.WriteFile(filepath.Join(jobDir, "result.json"), []byte(`{
+  "schema_name": "repo_inspection_v2",
+  "schema_version": "2.0.0",
+  "payload": {
+    "mode": "evidence",
+    "query": "trace inspect_repo timeout handling",
+    "findings": [],
+    "evidence": [
+      {
+        "id": "ev1",
+        "path": "broker/pkg/mcp/server.go",
+        "source_refs": [
+          {
+            "path": "broker/pkg/mcp/server.go",
+            "line_start": 435,
+            "line_end": 465
+          }
+        ]
+      }
+    ],
+    "quality": {
+      "result": "evidence_only",
+      "retrieval": "lexical_degraded",
+      "reranking": "unavailable",
+      "synthesis": "not_requested",
+      "answer_ready": false
+    },
+    "warnings": [],
+    "provenance": {"index_fingerprint": "sha256:test"},
+    "retrieval": {},
+    "runtime": {"attempts": []}
+  }
+}`), 0o644)
+		_ = os.WriteFile(filepath.Join(jobDir, "artifacts.json"), []byte(`[]`), 0o644)
+		time.Sleep(150 * time.Millisecond)
+		b.mu.Lock()
+		b.complete[job.ID] = true
+		b.mu.Unlock()
+	}()
+
+	return backends.SubmitResponse{
+		BackendKind:  "local",
+		BackendRunID: job.ID,
+		InitialState: types.JobStateQueued,
+	}, nil
+}
+
+func (b *localInspectRepoEarlyResultBackend) GetRun(_ context.Context, backendRunID string) (backends.RunStatus, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.complete[backendRunID] {
+		return backends.RunStatus{State: types.JobStateSucceeded, RawState: "COMPLETED", ExitCode: "0:0"}, nil
+	}
+	return backends.RunStatus{State: types.JobStateQueued, RawState: "PENDING"}, nil
+}
+
+func (b *localInspectRepoEarlyResultBackend) CancelRun(context.Context, string) error { return nil }
+
+type queuedOnlyBackend struct{}
+
+func (b *queuedOnlyBackend) Name() string { return "queued-only" }
+
+func (b *queuedOnlyBackend) SubmitRun(_ context.Context, job types.Job) (backends.SubmitResponse, error) {
+	return backends.SubmitResponse{
+		BackendKind:  "queued-only",
+		BackendRunID: job.ID,
+		InitialState: types.JobStateQueued,
+	}, nil
+}
+
+func (b *queuedOnlyBackend) GetRun(context.Context, string) (backends.RunStatus, error) {
+	return backends.RunStatus{State: types.JobStateQueued, RawState: "PENDING"}, nil
+}
+
+func (b *queuedOnlyBackend) CancelRun(context.Context, string) error { return nil }
 
 func (f *mcpTestBatchBackend) Name() string { return "mcp-fake-batch" }
 

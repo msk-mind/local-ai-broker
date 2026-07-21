@@ -10,7 +10,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -19,12 +18,15 @@ import (
 	"github.com/msk-mind/local-ai-broker/broker/pkg/auth"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/authz"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/backends"
-	"github.com/msk-mind/local-ai-broker/broker/pkg/cache"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/config"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/policy"
-	"github.com/msk-mind/local-ai-broker/broker/pkg/schemas"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/store"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/types"
+)
+
+const (
+	localInspectRepoResultProbeWindow   = 24 * time.Millisecond
+	localInspectRepoResultProbeInterval = 2 * time.Millisecond
 )
 
 type Service struct {
@@ -36,6 +38,7 @@ type Service struct {
 	repoRoot    string
 	models      modelProfiles
 	runtimes    runtimeProfiles
+	gpuServices gpuServiceSettings
 	options     Options
 }
 
@@ -56,6 +59,15 @@ type runtimeConnection struct {
 	TimeoutSeconds int
 }
 
+type gpuServiceSettings struct {
+	Enabled               bool
+	RegistryPath          string
+	ControlRequestPath    string
+	ControlToken          string
+	HealthIntervalSeconds int
+	StartupTimeoutSeconds int
+}
+
 type Options struct {
 	ParallelMaxBatchSize           int
 	ParallelMaxActiveBatches       int
@@ -63,450 +75,131 @@ type Options struct {
 	RootActionMaxRetriedShards     int
 }
 
+type Params struct {
+	JobStore    store.JobStore
+	Backend     backends.Backend
+	Logger      *log.Logger
+	AuditLogger audit.Logger
+	RunRoot     string
+	RepoRoot    string
+	Options     Options
+	Config      *config.Config
+}
+
 func New(jobStore store.JobStore, backend backends.Backend, logger *log.Logger, runRoot, repoRoot string) *Service {
-	return NewWithAuditAndOptionsAndConfig(jobStore, backend, logger, audit.NewNopLogger(), runRoot, repoRoot, Options{}, nil)
+	return NewWithParams(Params{
+		JobStore: jobStore,
+		Backend:  backend,
+		Logger:   logger,
+		RunRoot:  runRoot,
+		RepoRoot: repoRoot,
+	})
 }
 
 func NewWithAudit(jobStore store.JobStore, backend backends.Backend, logger *log.Logger, auditLogger audit.Logger, runRoot, repoRoot string) *Service {
-	return NewWithAuditAndOptionsAndConfig(jobStore, backend, logger, auditLogger, runRoot, repoRoot, Options{}, nil)
+	return NewWithParams(Params{
+		JobStore:    jobStore,
+		Backend:     backend,
+		Logger:      logger,
+		AuditLogger: auditLogger,
+		RunRoot:     runRoot,
+		RepoRoot:    repoRoot,
+	})
 }
 
 func NewWithAuditAndOptions(jobStore store.JobStore, backend backends.Backend, logger *log.Logger, auditLogger audit.Logger, runRoot, repoRoot string, opts Options) *Service {
-	return NewWithAuditAndOptionsAndConfig(jobStore, backend, logger, auditLogger, runRoot, repoRoot, opts, nil)
+	return NewWithParams(Params{
+		JobStore:    jobStore,
+		Backend:     backend,
+		Logger:      logger,
+		AuditLogger: auditLogger,
+		RunRoot:     runRoot,
+		RepoRoot:    repoRoot,
+		Options:     opts,
+	})
 }
 
 func NewWithAuditAndOptionsAndConfig(jobStore store.JobStore, backend backends.Backend, logger *log.Logger, auditLogger audit.Logger, runRoot, repoRoot string, opts Options, cfg *config.Config) *Service {
-	if auditLogger == nil {
-		auditLogger = audit.NewNopLogger()
+	return NewWithParams(Params{
+		JobStore:    jobStore,
+		Backend:     backend,
+		Logger:      logger,
+		AuditLogger: auditLogger,
+		RunRoot:     runRoot,
+		RepoRoot:    repoRoot,
+		Options:     opts,
+		Config:      cfg,
+	})
+}
+
+func NewWithParams(params Params) *Service {
+	if params.AuditLogger == nil {
+		params.AuditLogger = audit.NewNopLogger()
 	}
 	models := defaultModelProfiles()
 	runtimes := defaultRuntimeProfiles()
-	if cfg != nil {
+	gpuServices := gpuServiceSettings{}
+	if params.Config != nil {
 		models = modelProfiles{
-			cpu:  strings.TrimSpace(cfg.ModelProfileCPU),
-			p40:  strings.TrimSpace(cfg.ModelProfileP40),
-			a100: strings.TrimSpace(cfg.ModelProfileA100),
+			cpu:  strings.TrimSpace(params.Config.ModelProfileCPU),
+			p40:  strings.TrimSpace(params.Config.ModelProfileP40),
+			a100: strings.TrimSpace(params.Config.ModelProfileA100),
 		}
 		runtimes = runtimeProfiles{
 			llamaCPP: runtimeConnection{
-				BaseURL:        strings.TrimSpace(cfg.RuntimeLlamaCPPBaseURL),
-				TimeoutSeconds: cfg.RuntimeLlamaCPPTimeoutSeconds,
+				BaseURL:        strings.TrimSpace(params.Config.RuntimeLlamaCPPBaseURL),
+				TimeoutSeconds: params.Config.RuntimeLlamaCPPTimeoutSeconds,
 			},
 			vllm: runtimeConnection{
-				BaseURL:        strings.TrimSpace(cfg.RuntimeVLLMBaseURL),
-				TimeoutSeconds: cfg.RuntimeVLLMTimeoutSeconds,
+				BaseURL:        strings.TrimSpace(params.Config.RuntimeVLLMBaseURL),
+				TimeoutSeconds: params.Config.RuntimeVLLMTimeoutSeconds,
 			},
 			sglang: runtimeConnection{
-				BaseURL:        strings.TrimSpace(cfg.RuntimeSGLangBaseURL),
-				TimeoutSeconds: cfg.RuntimeSGLangTimeoutSeconds,
+				BaseURL:        strings.TrimSpace(params.Config.RuntimeSGLangBaseURL),
+				TimeoutSeconds: params.Config.RuntimeSGLangTimeoutSeconds,
 			},
+		}
+		gpuServices = gpuServiceSettings{
+			Enabled:               params.Config.GPUServiceEnabled,
+			RegistryPath:          resolveGPUServiceRegistryPath(params.RepoRoot, params.Config.GPUServiceRegistryPath),
+			ControlRequestPath:    resolveGPUServiceRegistryPath(params.RepoRoot, params.Config.GPUServiceControlRequestDir),
+			ControlToken:          strings.TrimSpace(params.Config.GPUServiceControlToken),
+			HealthIntervalSeconds: params.Config.GPUServiceHealthIntervalSeconds,
+			StartupTimeoutSeconds: params.Config.GPUServiceStartupTimeoutSeconds,
 		}
 	}
 	return &Service{
-		store:       jobStore,
-		backend:     backend,
-		logger:      logger,
-		auditLogger: auditLogger,
-		runRoot:     runRoot,
-		repoRoot:    repoRoot,
+		store:       params.JobStore,
+		backend:     params.Backend,
+		logger:      params.Logger,
+		auditLogger: params.AuditLogger,
+		runRoot:     params.RunRoot,
+		repoRoot:    params.RepoRoot,
 		models:      models,
 		runtimes:    runtimes,
-		options:     normalizeOptions(opts),
+		gpuServices: gpuServices,
+		options:     normalizeOptions(params.Options),
 	}
 }
 
-func (s *Service) SubmitJob(ctx context.Context, req types.SubmitJobRequest) (types.SubmitJobResponse, error) {
-	if req.TaskType == "" {
-		return types.SubmitJobResponse{}, errors.New("task_type is required")
+func resolveGPUServiceRegistryPath(repoRoot, registryPath string) string {
+	registryPath = strings.TrimSpace(registryPath)
+	if registryPath == "" || filepath.IsAbs(registryPath) {
+		return registryPath
 	}
-	if req.OutputSchema.Name == "" {
-		return types.SubmitJobResponse{}, errors.New("output_schema.name is required")
+	base := strings.TrimSpace(repoRoot)
+	if base == "" {
+		base = "."
 	}
-	submitStartedAt := time.Now()
-	req.ExecutionProfile = s.applyExecutionProfileDefaults(req.ExecutionProfile)
-
-	taskParams := cloneTaskParams(req.TaskParams)
-	taskParams["_broker_run_root"] = s.runRoot
-	taskParams["_broker_repo_root"] = s.repoRoot
-	req.TaskParams = taskParams
-
-	cacheKeyStartedAt := time.Now()
-	cacheKey, cacheable, err := cache.KeyForRequest(req)
-	cacheKeyDurationMS := durationMS(cacheKeyStartedAt)
+	resolved, err := filepath.Abs(filepath.Join(base, registryPath))
 	if err != nil {
-		s.logger.Printf("submit failed task_type=%s stage=cache_key duration_ms=%d err=%v", req.TaskType, cacheKeyDurationMS, err)
-		return types.SubmitJobResponse{}, fmt.Errorf("compute cache key: %w", err)
+		return filepath.Clean(filepath.Join(base, registryPath))
 	}
-	if cacheable {
-		cacheLookupStartedAt := time.Now()
-		cachedJob, err := cache.FindCompletedJobByCacheKey(ctx, s.store, cacheKey)
-		cacheLookupDurationMS := durationMS(cacheLookupStartedAt)
-		if err != nil {
-			s.logger.Printf("submit failed task_type=%s stage=cache_lookup cache_key_ms=%d cache_lookup_ms=%d err=%v", req.TaskType, cacheKeyDurationMS, cacheLookupDurationMS, err)
-			return types.SubmitJobResponse{}, fmt.Errorf("lookup cache: %w", err)
-		}
-		if cachedJob != nil {
-			now := time.Now().UTC()
-			principal := auth.PrincipalFromContext(ctx)
-			job := types.Job{
-				ID:                     newJobID(),
-				TaskType:               req.TaskType,
-				State:                  types.JobStateSucceeded,
-				SubmittedBy:            principal.Actor,
-				Request:                req,
-				Result:                 cachedJob.Result,
-				RuntimeDiagnostics:     cloneMap(cachedJob.RuntimeDiagnostics),
-				ExecutionQuality:       cachedJob.ExecutionQuality,
-				DegradedLocalExecution: cachedJob.DegradedLocalExecution,
-				RetryRecommended:       cachedJob.RetryRecommended,
-				Artifacts:              cloneArtifacts(cachedJob.Artifacts),
-				CreatedAt:              now,
-				UpdatedAt:              now,
-				SubmittedAt:            now,
-				StartedAt:              &now,
-				CompletedAt:            &now,
-				CacheKey:               cacheKey,
-				CacheStatus:            "hit",
-				BackendKind:            "cache",
-				BackendState:           "CACHE_HIT",
-			}
-			if err := s.store.CreateJob(ctx, job); err != nil {
-				return types.SubmitJobResponse{}, fmt.Errorf("store cached job: %w", err)
-			}
-			totalDurationMS := durationMS(submitStartedAt)
-			s.logger.Printf("cache hit job=%s source_job=%s task_type=%s cache_key_ms=%d cache_lookup_ms=%d total_submit_ms=%d", job.ID, cachedJob.ID, job.TaskType, cacheKeyDurationMS, cacheLookupDurationMS, totalDurationMS)
-			s.audit(ctx, "job.submit", "success", &job, map[string]any{
-				"cache_status":    "hit",
-				"backend_kind":    job.BackendKind,
-				"cache_key_ms":    cacheKeyDurationMS,
-				"cache_lookup_ms": cacheLookupDurationMS,
-				"total_submit_ms": totalDurationMS,
-				"cacheable":       cacheable,
-			})
-			return types.SubmitJobResponse{
-				JobID:     job.ID,
-				State:     job.State,
-				Cache:     types.CacheStatus{Status: job.CacheStatus},
-				StatusURL: "/v1/jobs/" + job.ID,
-			}, nil
-		}
-	}
-
-	now := time.Now().UTC()
-	principal := auth.PrincipalFromContext(ctx)
-	jobID := newJobID()
-	orchestration := normalizeOrchestration(jobID, req.Orchestration)
-	job := types.Job{
-		ID:            jobID,
-		TaskType:      req.TaskType,
-		State:         types.JobStateAccepted,
-		SubmittedBy:   principal.Actor,
-		Request:       req,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		SubmittedAt:   now,
-		CacheKey:      cacheKey,
-		CacheStatus:   "miss",
-		ParentJobID:   orchestration.ParentJobID,
-		RootJobID:     orchestration.RootJobID,
-		Orchestration: orchestration,
-	}
-
-	stageBundleStartedAt := time.Now()
-	if err := s.stageExecutionBundle(ctx, job); err != nil {
-		s.logger.Printf("submit failed task_type=%s stage=stage_bundle cache_key_ms=%d stage_bundle_ms=%d err=%v", req.TaskType, cacheKeyDurationMS, durationMS(stageBundleStartedAt), err)
-		return types.SubmitJobResponse{}, fmt.Errorf("stage execution bundle: %w", err)
-	}
-	stageBundleDurationMS := durationMS(stageBundleStartedAt)
-
-	backendSubmitStartedAt := time.Now()
-	submitResp, err := s.backend.SubmitRun(ctx, job)
-	backendSubmitDurationMS := durationMS(backendSubmitStartedAt)
-	if err != nil {
-		s.logger.Printf("submit failed task_type=%s stage=backend_submit cache_key_ms=%d stage_bundle_ms=%d backend_submit_ms=%d err=%v", req.TaskType, cacheKeyDurationMS, stageBundleDurationMS, backendSubmitDurationMS, err)
-		return types.SubmitJobResponse{}, fmt.Errorf("submit backend run: %w", err)
-	}
-	job.State = submitResp.InitialState
-	job.BackendKind = submitResp.BackendKind
-	job.BackendRunID = submitResp.BackendRunID
-
-	if err := s.store.CreateJob(ctx, job); err != nil {
-		return types.SubmitJobResponse{}, fmt.Errorf("store job: %w", err)
-	}
-
-	totalDurationMS := durationMS(submitStartedAt)
-	s.logger.Printf("submitted job=%s task_type=%s backend_run_id=%s cache_key_ms=%d stage_bundle_ms=%d backend_submit_ms=%d total_submit_ms=%d", job.ID, job.TaskType, job.BackendRunID, cacheKeyDurationMS, stageBundleDurationMS, backendSubmitDurationMS, totalDurationMS)
-	s.audit(ctx, "job.submit", "success", &job, map[string]any{
-		"cache_status":      job.CacheStatus,
-		"backend_kind":      job.BackendKind,
-		"cache_key_ms":      cacheKeyDurationMS,
-		"stage_bundle_ms":   stageBundleDurationMS,
-		"backend_submit_ms": backendSubmitDurationMS,
-		"total_submit_ms":   totalDurationMS,
-		"cacheable":         cacheable,
-	})
-
-	return types.SubmitJobResponse{
-		JobID:     job.ID,
-		State:     job.State,
-		Cache:     types.CacheStatus{Status: job.CacheStatus},
-		StatusURL: "/v1/jobs/" + job.ID,
-	}, nil
+	return resolved
 }
 
 func durationMS(start time.Time) int64 {
 	return time.Since(start).Milliseconds()
-}
-
-func (s *Service) SubmitParallelJobs(ctx context.Context, req types.SubmitParallelJobsRequest) (types.SubmitParallelJobsResponse, error) {
-	if req.TaskType == "" {
-		return types.SubmitParallelJobsResponse{}, errors.New("task_type is required")
-	}
-	if req.OutputSchema.Name == "" {
-		return types.SubmitParallelJobsResponse{}, errors.New("output_schema.name is required")
-	}
-	if len(req.Children) == 0 {
-		return types.SubmitParallelJobsResponse{}, errors.New("children is required")
-	}
-
-	rootJobID := strings.TrimSpace(req.RootJobID)
-	if rootJobID == "" {
-		rootJobID = newRootJobID()
-	}
-	strategy := strings.TrimSpace(req.Strategy)
-	if strategy == "" {
-		strategy = "fanout_child"
-	}
-
-	children := make([]types.ParallelChildSubmission, len(req.Children))
-	childJobIDs := make([]string, len(req.Children))
-	childBackendRunIDs := make([]string, 0, len(req.Children))
-	type pendingChild struct {
-		index  int
-		child  types.ParallelChildRequest
-		req    types.SubmitJobRequest
-		job    types.Job
-		status types.SubmitJobResponse
-		chunk  int
-	}
-	pending := make([]pendingChild, 0, len(req.Children))
-
-	for index, child := range req.Children {
-		taskParams := cloneTaskParams(req.TaskParams)
-		for k, v := range child.TaskParams {
-			taskParams[k] = v
-		}
-		submitReq := types.SubmitJobRequest{
-			TaskType:         req.TaskType,
-			InputRefs:        child.InputRefs,
-			TaskParams:       taskParams,
-			Constraints:      req.Constraints,
-			ExecutionProfile: s.applyExecutionProfileDefaults(req.ExecutionProfile),
-			OutputSchema:     req.OutputSchema,
-			Orchestration: types.OrchestrationRequest{
-				ParentJobID:     req.ParentJobID,
-				RootJobID:       rootJobID,
-				Strategy:        strategy,
-				ShardKey:        child.ShardKey,
-				ShardIndex:      child.ShardIndex,
-				ShardCount:      child.ShardCount,
-				AggregationKey:  firstNonEmpty(child.AggregationKey, ""),
-				DependsOnJobIDs: append([]string(nil), child.DependsOnJobIDs...),
-			},
-		}
-
-		enrichedParams := cloneTaskParams(submitReq.TaskParams)
-		enrichedParams["_broker_run_root"] = s.runRoot
-		enrichedParams["_broker_repo_root"] = s.repoRoot
-		submitReq.TaskParams = enrichedParams
-
-		cacheKey, cacheable, err := cache.KeyForRequest(submitReq)
-		if err != nil {
-			return types.SubmitParallelJobsResponse{}, fmt.Errorf("compute cache key for child shard %d: %w", child.ShardIndex, err)
-		}
-		if cacheable {
-			cachedJob, err := cache.FindCompletedJobByCacheKey(ctx, s.store, cacheKey)
-			if err != nil {
-				return types.SubmitParallelJobsResponse{}, fmt.Errorf("lookup cache for child shard %d: %w", child.ShardIndex, err)
-			}
-			if cachedJob != nil {
-				resp, err := s.SubmitJob(ctx, submitReq)
-				if err != nil {
-					return types.SubmitParallelJobsResponse{}, fmt.Errorf("submit cached child shard %d: %w", child.ShardIndex, err)
-				}
-				childJobIDs[index] = resp.JobID
-				children[index] = types.ParallelChildSubmission{
-					JobID:          resp.JobID,
-					State:          resp.State,
-					Cache:          resp.Cache,
-					StatusURL:      resp.StatusURL,
-					ShardKey:       child.ShardKey,
-					ShardIndex:     child.ShardIndex,
-					ShardCount:     child.ShardCount,
-					AggregationKey: child.AggregationKey,
-				}
-				continue
-			}
-		}
-
-		now := time.Now().UTC()
-		principal := auth.PrincipalFromContext(ctx)
-		jobID := newJobID()
-		orchestration := normalizeOrchestration(jobID, submitReq.Orchestration)
-		job := types.Job{
-			ID:            jobID,
-			TaskType:      submitReq.TaskType,
-			State:         types.JobStateDispatching,
-			SubmittedBy:   principal.Actor,
-			Request:       submitReq,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-			SubmittedAt:   now,
-			CacheKey:      cacheKey,
-			CacheStatus:   "miss",
-			ParentJobID:   orchestration.ParentJobID,
-			RootJobID:     orchestration.RootJobID,
-			Orchestration: orchestration,
-		}
-		if err := s.stageExecutionBundle(ctx, job); err != nil {
-			return types.SubmitParallelJobsResponse{}, fmt.Errorf("stage child shard %d execution bundle: %w", child.ShardIndex, err)
-		}
-		pending = append(pending, pendingChild{
-			index: index,
-			child: child,
-			req:   submitReq,
-			job:   job,
-			chunk: len(pending) / s.options.ParallelMaxBatchSize,
-		})
-	}
-
-	if len(pending) > 0 {
-		for i := range pending {
-			pending[i].job.Request.TaskParams["_broker_dispatch_chunk"] = pending[i].chunk
-			if err := s.store.CreateJob(ctx, pending[i].job); err != nil {
-				return types.SubmitParallelJobsResponse{}, fmt.Errorf("store child shard %d: %w", pending[i].child.ShardIndex, err)
-			}
-			s.logger.Printf("created child job=%s task_type=%s root_job_id=%s state=%s", pending[i].job.ID, pending[i].job.TaskType, pending[i].job.RootJobID, pending[i].job.State)
-			s.audit(ctx, "job.submit", "success", &pending[i].job, map[string]any{
-				"cache_status": pending[i].job.CacheStatus,
-				"backend_kind": pending[i].job.BackendKind,
-			})
-			children[pending[i].index] = types.ParallelChildSubmission{
-				JobID:          pending[i].job.ID,
-				State:          pending[i].job.State,
-				Cache:          types.CacheStatus{Status: pending[i].job.CacheStatus},
-				StatusURL:      "/v1/jobs/" + pending[i].job.ID,
-				ShardKey:       pending[i].child.ShardKey,
-				ShardIndex:     pending[i].child.ShardIndex,
-				ShardCount:     pending[i].child.ShardCount,
-				AggregationKey: pending[i].child.AggregationKey,
-			}
-			childJobIDs[pending[i].index] = pending[i].job.ID
-		}
-
-		if _, err := s.releaseDispatchingRootChildren(ctx, rootJobID, 0, false); err != nil {
-			return types.SubmitParallelJobsResponse{}, fmt.Errorf("release initial child batches: %w", err)
-		}
-		for i, childResp := range children {
-			job, err := s.store.GetJob(ctx, childResp.JobID)
-			if err == nil {
-				children[i].State = job.State
-				childBackendRunIDs = appendIfNonEmpty(childBackendRunIDs, job.BackendRunID)
-			}
-		}
-	}
-
-	var reducerResp *types.SubmitJobResponse
-	if req.Reducer != nil {
-		orderedChildJobIDs := compactNonEmptyStrings(childJobIDs)
-		reducerTaskType := firstNonEmpty(req.Reducer.TaskType, req.TaskType)
-		reducerSchema := req.Reducer.OutputSchema
-		if reducerSchema.Name == "" {
-			reducerSchema = req.OutputSchema
-		}
-		reducerProfile := req.ExecutionProfile
-		if req.Reducer.ExecutionProfile != (types.ExecutionProfile{}) {
-			reducerProfile = req.Reducer.ExecutionProfile
-		}
-		reducerConstraints := req.Constraints
-		if req.Reducer.Constraints != (types.Constraints{}) {
-			reducerConstraints = req.Reducer.Constraints
-		}
-		reducerTaskParams := cloneTaskParams(req.TaskParams)
-		for k, v := range req.Reducer.TaskParams {
-			reducerTaskParams[k] = v
-		}
-		reducerTaskParams["child_job_ids"] = append([]string(nil), orderedChildJobIDs...)
-		reducerTaskParams["root_job_id"] = rootJobID
-		reducerTaskParams["_dependency_backend_run_ids"] = append([]string(nil), childBackendRunIDs...)
-		reducerSubmitReq := types.SubmitJobRequest{
-			TaskType:         reducerTaskType,
-			InputRefs:        append([]types.InputRef(nil), req.Reducer.InputRefs...),
-			TaskParams:       reducerTaskParams,
-			Constraints:      reducerConstraints,
-			ExecutionProfile: s.applyExecutionProfileDefaults(reducerProfile),
-			OutputSchema:     reducerSchema,
-			Orchestration: types.OrchestrationRequest{
-				ParentJobID:     req.ParentJobID,
-				RootJobID:       rootJobID,
-				Strategy:        "aggregator",
-				AggregationKey:  firstNonEmpty(req.Reducer.AggregationKey, "aggregate"),
-				DependsOnJobIDs: append([]string(nil), orderedChildJobIDs...),
-			},
-		}
-		if hasDispatchingChildrenForJobIDs(ctx, s.store, orderedChildJobIDs) {
-			resp, err := s.createDeferredReducer(ctx, reducerSubmitReq)
-			if err != nil {
-				return types.SubmitParallelJobsResponse{}, fmt.Errorf("create deferred reducer: %w", err)
-			}
-			reducerResp = resp
-		} else {
-			resp, err := s.SubmitJob(ctx, reducerSubmitReq)
-			if err != nil {
-				return types.SubmitParallelJobsResponse{}, fmt.Errorf("submit reducer: %w", err)
-			}
-			reducerResp = &resp
-		}
-	}
-
-	return types.SubmitParallelJobsResponse{
-		RootJobID:   rootJobID,
-		ParentJobID: req.ParentJobID,
-		Strategy:    strategy,
-		ChildCount:  len(children),
-		Children:    children,
-		ReducerJob:  reducerResp,
-	}, nil
-}
-
-func normalizeOrchestration(jobID string, req types.OrchestrationRequest) *types.OrchestrationInfo {
-	rootJobID := strings.TrimSpace(req.RootJobID)
-	parentJobID := strings.TrimSpace(req.ParentJobID)
-	if rootJobID == "" {
-		if parentJobID != "" {
-			rootJobID = parentJobID
-		} else {
-			rootJobID = jobID
-		}
-	}
-	strategy := strings.TrimSpace(req.Strategy)
-	if strategy == "" {
-		if parentJobID != "" {
-			strategy = "fanout_child"
-		} else {
-			strategy = "standalone"
-		}
-	}
-	return &types.OrchestrationInfo{
-		ParentJobID:     parentJobID,
-		RootJobID:       rootJobID,
-		Strategy:        strategy,
-		ShardKey:        strings.TrimSpace(req.ShardKey),
-		ShardIndex:      req.ShardIndex,
-		ShardCount:      req.ShardCount,
-		AggregationKey:  strings.TrimSpace(req.AggregationKey),
-		DependsOnJobIDs: append([]string(nil), req.DependsOnJobIDs...),
-	}
 }
 
 func (s *Service) GetJob(ctx context.Context, jobID string) (types.Job, error) {
@@ -527,79 +220,97 @@ func (s *Service) getJob(ctx context.Context, jobID string) (types.Job, error) {
 	if err := authz.AuthorizeJobAccess(auth.PrincipalFromContext(ctx), job); err != nil {
 		return types.Job{}, err
 	}
-	if job.RootJobID != "" {
-		_, _ = s.releaseDispatchingRootChildren(ctx, job.RootJobID, 0, false)
-		if refreshed, refreshErr := s.store.GetJob(ctx, jobID); refreshErr == nil {
-			job = refreshed
+	return s.reconcileJobView(ctx, job)
+}
+
+func (s *Service) resolveCacheHitJob(job types.Job) (types.Job, error) {
+	sourceID := strings.TrimSpace(job.CacheSourceJobID)
+	if job.CacheStatus != "hit" || sourceID == "" {
+		return job, nil
+	}
+	source, err := s.store.GetJob(context.Background(), sourceID)
+	if err != nil {
+		return types.Job{}, err
+	}
+	if source.CacheStatus == "hit" && strings.TrimSpace(source.CacheSourceJobID) != "" && source.CacheSourceJobID != source.ID {
+		source, err = s.resolveCacheHitJob(source)
+		if err != nil {
+			return types.Job{}, err
 		}
 	}
-
-	if job.BackendRunID != "" && !isTerminal(job.State) {
-		runStatus, err := s.backend.GetRun(ctx, job.BackendRunID)
-		if err == nil {
-			if runStatus.State == "" || runStatus.State == job.State {
-				if job.BackendState == "" && runStatus.RawState != "" {
-					job.BackendState = runStatus.RawState
-					job.BackendExitCode = runStatus.ExitCode
-					_ = s.store.UpdateJob(ctx, job)
-				}
-			} else {
-				now := time.Now().UTC()
-				job.State = runStatus.State
-				job.BackendState = runStatus.RawState
-				job.BackendExitCode = runStatus.ExitCode
-				job.UpdatedAt = now
-				if runStatus.State == types.JobStateRunning && job.StartedAt == nil {
-					job.StartedAt = &now
-				}
-				if isTerminal(runStatus.State) {
-					job.CompletedAt = &now
-				}
-				if err := s.store.UpdateJob(ctx, job); err != nil {
-					return types.Job{}, fmt.Errorf("update refreshed job: %w", err)
-				}
-			}
+	if source.Result != nil {
+		result := cloneResult(source.Result)
+		if job.TaskType == "inspect_repo" {
+			result = inspectRepoCacheHitResult(result)
+		}
+		job.Result = result
+	}
+	job.State = source.State
+	job.BackendKind = "cache"
+	if source.State == types.JobStateSucceeded {
+		job.BackendState = "CACHE_HIT"
+		job.CompletedAt = source.CompletedAt
+		if source.StartedAt != nil {
+			job.StartedAt = source.StartedAt
+		}
+	} else {
+		job.BackendState = "CACHE_ALIAS"
+		job.CompletedAt = nil
+		if source.StartedAt != nil {
+			job.StartedAt = source.StartedAt
 		}
 	}
-
-	if updated, err := s.refreshProgress(ctx, job); err == nil {
-		job = updated
+	job.RuntimeDiagnostics = mergeRuntimeDiagnostics(
+		cloneMap(source.RuntimeDiagnostics),
+		cloneMap(job.RuntimeDiagnostics),
+	)
+	job.ExecutionQuality = source.ExecutionQuality
+	job.DegradedLocalExecution = source.DegradedLocalExecution
+	job.RetryRecommended = source.RetryRecommended
+	job.Artifacts = cloneArtifacts(source.Artifacts)
+	if job.ResultError == "" {
+		job.ResultError = source.ResultError
 	}
-
-	if job.State == types.JobStateSucceeded && job.Result == nil {
-		updated, err := s.ingestRunOutputs(ctx, job)
-		if err == nil {
-			job = updated
-		} else {
-			now := time.Now().UTC()
-			job.State = types.JobStateFailed
-			job.ResultError = err.Error()
-			job.UpdatedAt = now
-			job.CompletedAt = &now
-			_ = s.store.UpdateJob(ctx, job)
+	if job.TaskType == "inspect_repo" && isTerminal(source.State) {
+		timings := cloneMap(mapValue(mapValue(job.RuntimeDiagnostics)["broker_phase_timings_ms"]))
+		if timings == nil {
+			timings = map[string]any{}
+		}
+		if _, ok := timings["total_submit_ms"]; !ok {
+			timings["total_submit_ms"] = int64(0)
+		}
+		attachInspectRepoBrokerTimings(&job, "cache_hit", timings)
+	}
+	if job.Result != nil && job.TaskType == "inspect_repo" {
+		job.Result = inspectRepoReleasedResultWithBrokerRuntime(job, job.Result)
+	}
+	if isTerminal(source.State) {
+		stored := job
+		stored.Result = nil
+		stored.UpdatedAt = time.Now().UTC()
+		if err := s.store.UpdateJob(context.Background(), stored); err != nil {
+			return types.Job{}, err
 		}
 	}
-
 	return job, nil
 }
 
 func (s *Service) ListJobs(ctx context.Context) ([]types.Job, error) {
-	jobs, err := s.store.ListJobs(ctx)
+	jobs, err := s.listStoredJobs(ctx)
 	if err != nil {
 		return nil, err
 	}
 	principal := auth.PrincipalFromContext(ctx)
-	if auth.IsAdmin(principal) {
-		s.audit(ctx, "job.list", "success", nil, map[string]any{
-			"visible_count": len(jobs),
-		})
-		return jobs, nil
-	}
-	filtered := make([]types.Job, 0, len(jobs))
-	for _, job := range jobs {
-		if err := authz.AuthorizeJobAccess(principal, job); err == nil {
-			filtered = append(filtered, job)
+	filtered := filterAuthorizedJobs(principal, jobs)
+	for index, job := range filtered {
+		if isTerminal(job.State) && !(job.CacheStatus == "hit" && strings.TrimSpace(job.CacheSourceJobID) != "") {
+			continue
 		}
+		refreshed, err := s.reconcileJobView(ctx, job)
+		if err != nil {
+			continue
+		}
+		filtered[index] = refreshed
 	}
 	s.audit(ctx, "job.list", "success", nil, map[string]any{
 		"visible_count": len(filtered),
@@ -607,34 +318,42 @@ func (s *Service) ListJobs(ctx context.Context) ([]types.Job, error) {
 	return filtered, nil
 }
 
-func (s *Service) loadRootJobsAuthorized(ctx context.Context, rootJobID string) ([]types.Job, error) {
-	rootJobID = strings.TrimSpace(rootJobID)
-	if rootJobID == "" {
-		return nil, store.ErrNotFound
+func (s *Service) reconcileJobView(ctx context.Context, job types.Job) (types.Job, error) {
+	var err error
+	job, err = s.refreshJobState(ctx, job)
+	if err != nil {
+		return types.Job{}, err
 	}
-	jobs, err := s.store.ListJobs(ctx)
+
+	job, _ = s.maybeIngestJobOutputs(ctx, job)
+	// Workers write a final completed heartbeat immediately before result.json.
+	// Ingesting the result makes the job terminal, which used to skip the normal
+	// progress refresh and lose that final 100% state. Do not ingest stale
+	// running heartbeats after a result has already won the race.
+	if job.Result != nil && job.Progress == nil && completedHeartbeatExists(s.runRoot, job.ID) {
+		if updated, err := s.refreshProgress(ctx, job); err == nil {
+			job = updated
+		}
+	}
+	if job.Result == nil && !isTerminal(job.State) {
+		if updated, err := s.refreshProgress(ctx, job); err == nil {
+			job = updated
+		}
+	}
+	job, err = s.resolveCacheHitJob(job)
+	if err != nil {
+		return types.Job{}, err
+	}
+	return job, nil
+}
+
+func (s *Service) loadRootJobsAuthorized(ctx context.Context, rootJobID string) ([]types.Job, error) {
+	jobs, err := s.listStoredJobs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	filtered := make([]types.Job, 0, len(jobs))
 	principal := auth.PrincipalFromContext(ctx)
-	var unauthorized bool
-	for _, job := range jobs {
-		if job.RootJobID != rootJobID {
-			continue
-		}
-		filtered = append(filtered, job)
-		if err := authz.AuthorizeJobAccess(principal, job); err != nil {
-			unauthorized = true
-		}
-	}
-	if len(filtered) == 0 {
-		return nil, store.ErrNotFound
-	}
-	if unauthorized {
-		return nil, fmt.Errorf("%w: root %q includes inaccessible jobs", authz.ErrForbidden, rootJobID)
-	}
-	return filtered, nil
+	return ensureAuthorizedRootJobs(principal, rootJobID, jobs)
 }
 
 func (s *Service) authorizeForcedRootRelease(ctx context.Context, requestedBatches int) error {
@@ -642,30 +361,14 @@ func (s *Service) authorizeForcedRootRelease(ctx context.Context, requestedBatch
 }
 
 func (s *Service) authorizeForcedRootReleaseWithUsage(ctx context.Context, requestedBatches, existingBatches int) error {
-	if requestedBatches <= 0 {
-		return nil
-	}
-	principal := auth.PrincipalFromContext(ctx)
-	if auth.IsAdmin(principal) {
-		return nil
-	}
-	if requestedBatches > s.options.RootActionMaxAdditionalBatches {
-		return fmt.Errorf(
-			"%w: requested max_additional_batches=%d exceeds non-admin limit %d",
-			authz.ErrForbidden,
-			requestedBatches,
-			s.options.RootActionMaxAdditionalBatches,
-		)
-	}
-	if existingBatches+requestedBatches > s.options.RootActionMaxAdditionalBatches {
-		return fmt.Errorf(
-			"%w: cumulative forced_release_batches=%d would exceed non-admin limit %d",
-			authz.ErrForbidden,
-			existingBatches+requestedBatches,
-			s.options.RootActionMaxAdditionalBatches,
-		)
-	}
-	return nil
+	return authorizeCumulativeNonAdminAction(
+		ctx,
+		requestedBatches,
+		existingBatches,
+		s.options.RootActionMaxAdditionalBatches,
+		"max_additional_batches",
+		"forced_release_batches",
+	)
 }
 
 func (s *Service) authorizeFailedShardRetry(ctx context.Context, requestedShards int) error {
@@ -673,30 +376,14 @@ func (s *Service) authorizeFailedShardRetry(ctx context.Context, requestedShards
 }
 
 func (s *Service) authorizeFailedShardRetryWithUsage(ctx context.Context, requestedShards, existingShards int) error {
-	if requestedShards <= 0 {
-		return nil
-	}
-	principal := auth.PrincipalFromContext(ctx)
-	if auth.IsAdmin(principal) {
-		return nil
-	}
-	if requestedShards > s.options.RootActionMaxRetriedShards {
-		return fmt.Errorf(
-			"%w: requested retried_shards=%d exceeds non-admin limit %d",
-			authz.ErrForbidden,
-			requestedShards,
-			s.options.RootActionMaxRetriedShards,
-		)
-	}
-	if existingShards+requestedShards > s.options.RootActionMaxRetriedShards {
-		return fmt.Errorf(
-			"%w: cumulative retried_shards=%d would exceed non-admin limit %d",
-			authz.ErrForbidden,
-			existingShards+requestedShards,
-			s.options.RootActionMaxRetriedShards,
-		)
-	}
-	return nil
+	return authorizeCumulativeNonAdminAction(
+		ctx,
+		requestedShards,
+		existingShards,
+		s.options.RootActionMaxRetriedShards,
+		"retried_shards",
+		"retried_shards",
+	)
 }
 
 func (s *Service) GetRootJobStatus(ctx context.Context, rootJobID string) (types.RootJobStatus, error) {
@@ -709,81 +396,7 @@ func (s *Service) GetRootJobStatus(ctx context.Context, rootJobID string) (types
 	if err != nil {
 		return types.RootJobStatus{}, err
 	}
-
-	status := types.RootJobStatus{
-		RootJobID: rootJobID,
-		State:     types.JobStateQueued,
-	}
-	status.DispatchingChildren, status.PendingChildren, status.ActiveChunks, status.PendingChunks = dispatchObservability(filtered)
-	usage := rootActionUsage(filtered)
-	status.ForcedReleasedChunks = usage.ForcedReleasedChunks
-	status.RetriedShardActions = usage.RetriedShardActions
-	effectiveChildren := effectiveShardJobs(filtered, false)
-	effectiveReducers := effectiveReducerJobs(filtered)
-	var reducer *types.Job
-	aggregationKeys := map[string]struct{}{}
-	for i := range effectiveChildren {
-		job := effectiveChildren[i]
-		status.TotalJobs++
-		switch job.State {
-		case types.JobStateAccepted, types.JobStateQueued, types.JobStateDispatching:
-			status.QueuedJobs++
-		case types.JobStateRunning:
-			status.RunningJobs++
-		case types.JobStateSucceeded:
-			status.SucceededJobs++
-		case types.JobStateFailed, types.JobStatePreempted, types.JobStateTimedOut:
-			status.FailedJobs++
-		case types.JobStateCancelled:
-			status.CancelledJobs++
-		}
-
-		status.ChildJobIDs = append(status.ChildJobIDs, job.ID)
-		if job.Orchestration != nil && job.Orchestration.AggregationKey != "" {
-			aggregationKeys[job.Orchestration.AggregationKey] = struct{}{}
-		}
-		if job.ResultError != "" && status.RepresentativeError == "" {
-			status.RepresentativeError = job.ResultError
-		}
-		if progressNewer(job.Progress, status.Progress) {
-			status.Progress = job.Progress
-		}
-	}
-	if len(effectiveReducers) > 0 {
-		reducer = &effectiveReducers[0]
-		status.TotalJobs++
-		switch reducer.State {
-		case types.JobStateAccepted, types.JobStateQueued, types.JobStateDispatching:
-			status.QueuedJobs++
-		case types.JobStateRunning:
-			status.RunningJobs++
-		case types.JobStateSucceeded:
-			status.SucceededJobs++
-		case types.JobStateFailed, types.JobStatePreempted, types.JobStateTimedOut:
-			status.FailedJobs++
-		case types.JobStateCancelled:
-			status.CancelledJobs++
-		}
-		if reducer.Orchestration != nil && reducer.Orchestration.AggregationKey != "" {
-			aggregationKeys[reducer.Orchestration.AggregationKey] = struct{}{}
-		}
-		if reducer.ResultError != "" && status.RepresentativeError == "" {
-			status.RepresentativeError = reducer.ResultError
-		}
-		if progressNewer(reducer.Progress, status.Progress) {
-			status.Progress = reducer.Progress
-		}
-	}
-
-	if reducer != nil {
-		status.ReducerJobID = reducer.ID
-		status.ReducerState = reducer.State
-		status.ReducerDeferred = reducer.State == types.JobStateDispatching && reducer.BackendRunID == ""
-		applyReducerMetrics(&status, reducer.Result)
-	}
-	status.AggregationKeys = setKeys(aggregationKeys)
-	status.State = aggregateRootState(status)
-	return status, nil
+	return rootJobStatusFromState(rootJobID, buildRootSummaryState(filtered, false)), nil
 }
 
 func (s *Service) RetryFailedRootShards(ctx context.Context, req types.RetryFailedRootShardsRequest) (types.RetryFailedRootShardsResponse, error) {
@@ -797,15 +410,15 @@ func (s *Service) RetryFailedRootShards(ctx context.Context, req types.RetryFail
 		return types.RetryFailedRootShardsResponse{}, err
 	}
 
-	effectiveChildren := effectiveShardJobs(filtered, req.IncludeCancelled)
+	state := buildRootSummaryState(filtered, req.IncludeCancelled)
+	effectiveChildren := state.effectiveChildren
 	retryableCount := 0
 	for _, job := range effectiveChildren {
 		if shouldRetryShard(job, req.IncludeCancelled) {
 			retryableCount++
 		}
 	}
-	usage := rootActionUsage(filtered)
-	if err := s.authorizeFailedShardRetryWithUsage(ctx, retryableCount, usage.RetriedShardActions); err != nil {
+	if err := s.authorizeFailedShardRetryWithUsage(ctx, retryableCount, state.usage.RetriedShardActions); err != nil {
 		return types.RetryFailedRootShardsResponse{}, err
 	}
 	response := types.RetryFailedRootShardsResponse{
@@ -815,7 +428,7 @@ func (s *Service) RetryFailedRootShards(ctx context.Context, req types.RetryFail
 	for _, job := range effectiveChildren {
 		if shouldRetryShard(job, req.IncludeCancelled) {
 			retryReq := retrySubmitRequest(job)
-			retryReq.TaskParams["_broker_retry_action"] = true
+			retryReq.TaskParams[taskParamRetryAction] = true
 			resp, err := s.SubmitJob(ctx, retryReq)
 			if err != nil {
 				return types.RetryFailedRootShardsResponse{}, fmt.Errorf("retry shard %s: %w", job.ID, err)
@@ -849,13 +462,12 @@ func (s *Service) RetryFailedRootShards(ctx context.Context, req types.RetryFail
 	}
 	response.RetriedCount = len(response.RetriedShards)
 	response.SkippedCount = len(response.SkippedShards)
-	response.CumulativeRetriedShards = usage.RetriedShardActions + response.RetriedCount
+	response.CumulativeRetriedShards = state.usage.RetriedShardActions + response.RetriedCount
 	response.RemainingRetriedShardBudget = remainingNonAdminBudget(s.options.RootActionMaxRetriedShards, response.CumulativeRetriedShards, auth.PrincipalFromContext(ctx))
 
 	if req.ResubmitReducer && len(response.RetriedShards) > 0 {
-		reducers := effectiveReducerJobs(filtered)
-		if len(reducers) > 0 {
-			resp, err := s.submitRetriedReducer(ctx, reducers[0], currentEffective)
+		if len(state.effectiveReducers) > 0 {
+			resp, err := s.submitRetriedReducer(ctx, state.effectiveReducers[0], currentEffective)
 			if err != nil {
 				return types.RetryFailedRootShardsResponse{}, fmt.Errorf("resubmit reducer: %w", err)
 			}
@@ -875,8 +487,8 @@ func (s *Service) ReleaseDeferredRootChunks(ctx context.Context, req types.Relea
 	if err != nil {
 		return types.ReleaseDeferredRootChunksResponse{}, err
 	}
-	usage := rootActionUsage(filtered)
-	if err := s.authorizeForcedRootReleaseWithUsage(ctx, req.MaxAdditionalBatches, usage.ForcedReleasedChunks); err != nil {
+	state := buildRootSummaryState(filtered, false)
+	if err := s.authorizeForcedRootReleaseWithUsage(ctx, req.MaxAdditionalBatches, state.usage.ForcedReleasedChunks); err != nil {
 		return types.ReleaseDeferredRootChunksResponse{}, err
 	}
 	release, err := s.releaseDispatchingRootChildren(ctx, rootJobID, req.MaxAdditionalBatches, req.MaxAdditionalBatches > 0)
@@ -990,17 +602,155 @@ func (s *Service) GetJobLogs(ctx context.Context, jobID, stream string, maxBytes
 }
 
 func (s *Service) GetReleasedResult(ctx context.Context, jobID string) (types.JobResultRelease, error) {
-	job, err := s.getJob(ctx, jobID)
+	job, err := s.store.GetJob(ctx, jobID)
 	if err != nil {
 		s.auditDeniedLookup(ctx, "job.fetch_result", jobID, err)
 		return types.JobResultRelease{}, err
 	}
+	if err := authz.AuthorizeJobAccess(auth.PrincipalFromContext(ctx), job); err != nil {
+		s.auditDeniedLookup(ctx, "job.fetch_result", jobID, err)
+		return types.JobResultRelease{}, err
+	}
+	if !skipInspectRepoResultProbe(ctx) {
+		if releaseJob, ok, err := s.awaitDirectInspectRepoReleasedResult(job, localInspectRepoResultProbeWindow); err != nil {
+			return types.JobResultRelease{}, err
+		} else if ok {
+			release, err := buildReleasedResult(releaseJob)
+			if err != nil {
+				return types.JobResultRelease{}, err
+			}
+			s.audit(ctx, "job.fetch_result", "success", &releaseJob, map[string]any{
+				"artifact_count": len(release.Artifacts),
+				"has_result":     release.Result != nil,
+				"result_source":  "run_files_direct",
+			})
+			return release, nil
+		}
+	}
+	if releaseJob, ok, err := s.tryDirectInspectRepoReleasedResult(job); err != nil {
+		return types.JobResultRelease{}, err
+	} else if ok {
+		release, err := buildReleasedResult(releaseJob)
+		if err != nil {
+			return types.JobResultRelease{}, err
+		}
+		s.audit(ctx, "job.fetch_result", "success", &releaseJob, map[string]any{
+			"artifact_count": len(release.Artifacts),
+			"has_result":     release.Result != nil,
+			"result_source":  "run_files_direct",
+		})
+		return release, nil
+	}
+	job, err = s.getJob(ctx, jobID)
+	if err != nil {
+		s.auditDeniedLookup(ctx, "job.fetch_result", jobID, err)
+		return types.JobResultRelease{}, err
+	}
+	release, err := buildReleasedResult(job)
+	if err != nil {
+		return types.JobResultRelease{}, err
+	}
+	s.audit(ctx, "job.fetch_result", "success", &job, map[string]any{
+		"artifact_count": len(release.Artifacts),
+		"has_result":     release.Result != nil,
+	})
+	return release, nil
+}
 
+func (s *Service) awaitInspectRepoRunResult(job types.Job, waitWindow time.Duration) {
+	if !s.shouldProbeInspectRepoRunResult(job) || waitWindow <= 0 {
+		return
+	}
+	deadline := time.Now().Add(waitWindow)
+	for !time.Now().After(deadline) {
+		if s.runResultExists(job) {
+			return
+		}
+		time.Sleep(localInspectRepoResultProbeInterval)
+	}
+}
+
+func (s *Service) awaitDirectInspectRepoReleasedResult(job types.Job, waitWindow time.Duration) (types.Job, bool, error) {
+	if !s.shouldProbeInspectRepoRunResult(job) || waitWindow <= 0 {
+		return job, false, nil
+	}
+	if waiter, ok := s.backend.(backends.LocalInspectRepoResultWaiter); ok {
+		if releaseJob, ok, err := s.tryDirectInspectRepoReleasedResult(job); err != nil {
+			return job, false, err
+		} else if ok {
+			return releaseJob, true, nil
+		}
+		if waiter.AwaitLocalInspectRepoResult(context.Background(), job.BackendRunID, waitWindow) {
+			if releaseJob, ok, err := s.tryDirectInspectRepoReleasedResult(job); err != nil {
+				return job, false, err
+			} else if ok {
+				return releaseJob, true, nil
+			}
+		}
+		return job, false, nil
+	}
+	deadline := time.Now().Add(waitWindow)
+	for {
+		if releaseJob, ok, err := s.tryDirectInspectRepoReleasedResult(job); err != nil {
+			return job, false, err
+		} else if ok {
+			return releaseJob, true, nil
+		}
+		if time.Now().After(deadline) {
+			return job, false, nil
+		}
+		time.Sleep(localInspectRepoResultProbeInterval)
+	}
+}
+
+func (s *Service) shouldProbeInspectRepoRunResult(job types.Job) bool {
+	if job.TaskType != "inspect_repo" || job.Result != nil {
+		return false
+	}
+	if job.CacheStatus == "hit" && strings.TrimSpace(job.CacheSourceJobID) != "" {
+		return false
+	}
+	if job.BackendKind != "local" || strings.TrimSpace(job.BackendRunID) == "" {
+		return false
+	}
+	return true
+}
+
+func (s *Service) tryDirectInspectRepoReleasedResult(job types.Job) (types.Job, bool, error) {
+	if job.TaskType != "inspect_repo" || job.Result != nil {
+		return job, false, nil
+	}
+	if job.CacheStatus == "hit" && strings.TrimSpace(job.CacheSourceJobID) != "" {
+		return job, false, nil
+	}
+	result, err := s.readRunResult(job)
+	if err != nil {
+		return job, false, nil
+	}
+	transient := job
+	if transient.State != types.JobStateSucceeded {
+		now := time.Now().UTC()
+		transient.State = types.JobStateSucceeded
+		transient.BackendState = strings.TrimSpace(transient.BackendState)
+		transient.UpdatedAt = now
+		if transient.CompletedAt == nil {
+			transient.CompletedAt = &now
+		}
+	}
+	transient = s.applyIngestedOutputs(transient, result, s.readRunArtifacts(job))
+	return transient, true, nil
+}
+
+func buildReleasedResult(job types.Job) (types.JobResultRelease, error) {
 	result, artifacts, err := policy.FilterJobResult(job)
 	if err != nil {
 		return types.JobResultRelease{}, err
 	}
-	release := types.JobResultRelease{
+	if result != nil {
+		result = inspectRepoReleasedResultWithBrokerRuntime(job, result)
+	}
+	artifacts = filterJobArtifactsForRelease(job, artifacts)
+	return types.JobResultRelease{
 		JobID:                  job.ID,
 		State:                  job.State,
 		Result:                 result,
@@ -1009,12 +759,60 @@ func (s *Service) GetReleasedResult(ctx context.Context, jobID string) (types.Jo
 		DegradedLocalExecution: job.DegradedLocalExecution,
 		RetryRecommended:       job.RetryRecommended,
 		Artifacts:              artifacts,
+	}, nil
+}
+
+func inspectRepoReleasedResultWithBrokerRuntime(job types.Job, result *types.Result) *types.Result {
+	if result == nil || job.TaskType != "inspect_repo" || result.SchemaName != "repo_inspection_v2" {
+		return result
 	}
-	s.audit(ctx, "job.fetch_result", "success", &job, map[string]any{
-		"artifact_count": len(artifacts),
-		"has_result":     result != nil,
-	})
-	return release, nil
+	brokerPhaseTimings := cloneMap(mapValue(mapValue(job.RuntimeDiagnostics)["broker_phase_timings_ms"]))
+	brokerResultSource := stringValue(mapValue(job.RuntimeDiagnostics)["broker_result_source"])
+	if len(brokerPhaseTimings) == 0 && brokerResultSource == "" {
+		return result
+	}
+	cloned := cloneResult(result)
+	payload := cloneMap(cloned.Payload)
+	runtime := cloneMap(mapValue(payload["runtime"]))
+	if runtime == nil {
+		runtime = map[string]any{}
+	}
+	if len(brokerPhaseTimings) > 0 {
+		runtime["broker_phase_timings_ms"] = brokerPhaseTimings
+	}
+	if brokerResultSource != "" {
+		runtime["broker_result_source"] = brokerResultSource
+	}
+	payload["runtime"] = runtime
+	cloned.Payload = payload
+	return cloned
+}
+
+func attachInspectRepoBrokerRuntimeToRelease(release *types.JobResultRelease, brokerResultSource string, timings map[string]any) {
+	if release == nil {
+		return
+	}
+	job := types.Job{
+		TaskType:           "inspect_repo",
+		RuntimeDiagnostics: cloneMap(release.RuntimeDiagnostics),
+	}
+	attachInspectRepoBrokerTimings(&job, brokerResultSource, timings)
+	release.RuntimeDiagnostics = cloneMap(job.RuntimeDiagnostics)
+	release.Result = inspectRepoReleasedResultWithBrokerRuntime(job, release.Result)
+}
+
+func filterArtifactsByType(artifacts []types.Artifact, allowed ...string) []types.Artifact {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, artifactType := range allowed {
+		allowedSet[artifactType] = struct{}{}
+	}
+	filtered := make([]types.Artifact, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		if _, ok := allowedSet[artifact.ArtifactType]; ok {
+			filtered = append(filtered, artifact)
+		}
+	}
+	return filtered
 }
 
 func (s *Service) GetJobRetryRecommendation(ctx context.Context, jobID string) (types.JobRetryRecommendation, error) {
@@ -1046,7 +844,7 @@ func (s *Service) RetryJobWithRecommendation(ctx context.Context, jobID string) 
 	}
 	req := job.Request
 	req.TaskParams = cloneTaskParams(job.Request.TaskParams)
-	req.TaskParams["_broker_retry_recommended_of_job_id"] = job.ID
+	req.TaskParams[taskParamRetryOfJobID] = job.ID
 	req.ExecutionProfile = rec.ExecutionProfile
 	req.ExecutionProfile = mergePlacementHintIntoProfile(req.ExecutionProfile, rec.PlacementHint)
 	req.ExecutionProfile = s.applyExecutionProfileDefaults(req.ExecutionProfile)
@@ -1068,7 +866,10 @@ func (s *Service) GetArtifactMetadata(ctx context.Context, artifactID string, al
 		if err := authz.AuthorizeJobAccess(principal, job); err != nil {
 			continue
 		}
-		for _, artifact := range job.Artifacts {
+		// Metadata contains no artifact path or content. Keep it available for
+		// authorized jobs while still enforcing inspection's full-trace gate.
+		eligible := filterJobArtifactsForRelease(job, job.Artifacts)
+		for _, artifact := range eligible {
 			if artifact.ArtifactID != artifactID {
 				continue
 			}
@@ -1098,35 +899,31 @@ func (s *Service) GetArtifactMetadata(ctx context.Context, artifactID string, al
 }
 
 func (s *Service) LookupCache(ctx context.Context, req types.SubmitJobRequest) (types.CacheLookupResponse, error) {
-	cacheKey, cacheable, err := cache.KeyForRequest(req)
+	cacheLookup, err := s.lookupCompletedCacheJob(ctx, req)
 	if err != nil {
-		return types.CacheLookupResponse{}, fmt.Errorf("compute cache key: %w", err)
+		return types.CacheLookupResponse{}, err
 	}
 	resp := types.CacheLookupResponse{
 		Status:     "uncacheable",
 		TaskType:   req.TaskType,
 		SchemaName: req.OutputSchema.Name,
-		CacheKey:   cacheKey,
+		CacheKey:   cacheLookup.key,
 	}
-	if !cacheable {
+	if !cacheLookup.cacheable {
 		return resp, nil
 	}
 	resp.Status = "miss"
-	cachedJob, err := cache.FindCompletedJobByCacheKey(ctx, s.store, cacheKey)
-	if err != nil {
-		return types.CacheLookupResponse{}, fmt.Errorf("lookup cache: %w", err)
-	}
-	if cachedJob == nil {
+	if cacheLookup.job == nil {
 		return resp, nil
 	}
 	principal := auth.PrincipalFromContext(ctx)
-	if err := authz.AuthorizeJobAccess(principal, *cachedJob); err != nil {
+	if err := authz.AuthorizeJobAccess(principal, *cacheLookup.job); err != nil {
 		// Do not disclose inaccessible cache hits to non-admin callers.
 		return resp, nil
 	}
 	resp.Status = "hit"
-	resp.SourceJobID = cachedJob.ID
-	resp.ArtifactCount = len(cachedJob.Artifacts)
+	resp.SourceJobID = cacheLookup.job.ID
+	resp.ArtifactCount = len(cacheLookup.job.Artifacts)
 	return resp, nil
 }
 
@@ -1155,99 +952,22 @@ func isTerminal(state types.JobState) bool {
 	}
 }
 
-func (s *Service) refreshProgress(ctx context.Context, job types.Job) (types.Job, error) {
-	heartbeatPath := filepath.Join(s.runRoot, job.ID, "heartbeat.json")
-	heartbeatBytes, err := os.ReadFile(heartbeatPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return job, nil
-		}
-		return job, err
-	}
-
-	var heartbeat struct {
-		JobID     string         `json:"job_id"`
-		State     string         `json:"state"`
-		Phase     string         `json:"phase"`
-		Percent   int            `json:"percent"`
-		Message   string         `json:"message"`
-		Timestamp string         `json:"timestamp"`
-		Metrics   map[string]any `json:"metrics"`
-	}
-	if err := json.Unmarshal(heartbeatBytes, &heartbeat); err != nil {
-		return job, err
-	}
-
-	progress := &types.ProgressInfo{
-		State:   heartbeat.State,
-		Phase:   heartbeat.Phase,
-		Percent: heartbeat.Percent,
-		Message: heartbeat.Message,
-		Metrics: heartbeat.Metrics,
-	}
-	now := time.Now().UTC()
-	progress.LastUpdated = &now
-	if heartbeat.Timestamp != "" {
-		if ts, err := time.Parse(time.RFC3339, heartbeat.Timestamp); err == nil {
-			progress.Timestamp = &ts
-			progress.LastUpdated = &ts
-		}
-	}
-
-	if progressEquals(job.Progress, progress) {
-		return job, nil
-	}
-
-	job.Progress = progress
-	job.UpdatedAt = now
-	if err := s.store.UpdateJob(ctx, job); err != nil {
-		return types.Job{}, fmt.Errorf("persist progress: %w", err)
-	}
-	return job, nil
-}
-
-func (s *Service) ingestRunOutputs(ctx context.Context, job types.Job) (types.Job, error) {
-	resultPath := filepath.Join(s.runRoot, job.ID, "result.json")
-	artifactsPath := filepath.Join(s.runRoot, job.ID, "artifacts.json")
-
-	resultBytes, err := os.ReadFile(resultPath)
-	if err != nil {
-		return job, err
-	}
-
-	var result types.Result
-	if err := json.Unmarshal(resultBytes, &result); err != nil {
-		return job, err
-	}
-	if err := schemas.ValidateResult(job.TaskType, job.Request.OutputSchema.Name, result); err != nil {
-		return job, err
-	}
-	applyBrokerResultPolicies(&job, &result)
-	job.Result = &result
-
-	if artifactBytes, err := os.ReadFile(artifactsPath); err == nil && len(artifactBytes) > 0 {
-		var artifacts []types.Artifact
-		if err := json.Unmarshal(artifactBytes, &artifacts); err == nil {
-			job.Artifacts = artifacts
-		}
-	}
-	job.RuntimeDiagnostics = s.extractRuntimeDiagnostics(job, result)
-	job.DegradedLocalExecution = isDegradedLocalExecution(job.RuntimeDiagnostics)
-	job.RetryRecommended = hasRetryRecommendation(job)
-	job.ExecutionQuality = deriveExecutionQuality(job.RuntimeDiagnostics, job.RetryRecommended)
-
-	job.UpdatedAt = time.Now().UTC()
-	if err := s.store.UpdateJob(ctx, job); err != nil {
-		return types.Job{}, fmt.Errorf("persist ingested outputs: %w", err)
-	}
-	return job, nil
-}
-
 func applyBrokerResultPolicies(job *types.Job, result *types.Result) {
 	if job == nil || result == nil {
 		return
 	}
 	if !isRAGLikeTask(job.TaskType) {
+		return
+	}
+	// repo_inspection_v2 owns its quality states and escalation history. Legacy
+	// policy promotion/guidance must not turn lexical evidence into an answer or
+	// append fields outside the v2 contract.
+	if job.TaskType == "inspect_repo" && result.SchemaName == "repo_inspection_v2" {
+		quality, _ := result.Payload["quality"].(map[string]any)
+		if stringValue(quality["result"]) == "failed" {
+			job.State = types.JobStateFailed
+			job.ResultError = "repo_inspection_gpu_tiers_exhausted"
+		}
 		return
 	}
 	payload := result.Payload
@@ -1257,9 +977,6 @@ func applyBrokerResultPolicies(job *types.Job, result *types.Result) {
 	}
 
 	warnings := collectStringSlice(policySignals["warnings"])
-	if len(warnings) == 0 {
-		return
-	}
 	existing := collectStringSlice(payload["warnings"])
 	for _, warning := range warnings {
 		switch warning {
@@ -1287,627 +1004,73 @@ func applyBrokerResultPolicies(job *types.Job, result *types.Result) {
 	if len(existing) > 0 {
 		payload["warnings"] = stringSliceToAny(existing)
 	}
+	applyAgentFacingGuidance(job, payload, warnings)
 }
 
-func requiresStrictRetrievalQuality(job types.Job) bool {
-	if job.TaskType == "inspect_repo" {
-		return true
+func applyAgentFacingGuidance(job *types.Job, payload map[string]any, warnings []string) {
+	if payload == nil || job == nil {
+		return
 	}
-	if job.Request.TaskParams == nil {
-		return false
+	needsVerification := hasAnyString(warnings, []string{
+		"LOCAL_RETRIEVAL_DEGRADED",
+		"NO_REAL_RETRIEVAL_BACKEND",
+		"IGNORED_PATH_RETRIEVAL_CONTAMINATION",
+	})
+	mode := "broker_evidence_ready"
+	recommendation := defaultAgentNextAction(job.TaskType)
+	confidence := "high"
+	if hasAnyString(warnings, []string{"NO_REAL_RETRIEVAL_BACKEND"}) {
+		mode = "lead_generation_only"
+		recommendation = "Treat this result as a lead only. Retry with the recommended profile or inspect the cited files directly before making claims."
+		confidence = "low"
+	} else if needsVerification {
+		mode = "verify_before_claiming"
+		recommendation = "Use the cited evidence as a pointer, but verify the referenced files directly before making strong claims."
+		confidence = "medium"
 	}
-	return boolValue(job.Request.TaskParams["strict_retrieval_quality"])
+	payload["usage_guidance"] = mergePayloadMap(mapValue(payload["usage_guidance"]), map[string]any{
+		"mode":                      mode,
+		"needs_direct_verification": needsVerification,
+		"recommended_action":        recommendation,
+	})
+	if stringValue(payload["recommended_next_action"]) == "" {
+		payload["recommended_next_action"] = recommendation
+	}
+	if stringValue(payload["confidence"]) == "" {
+		payload["confidence"] = confidence
+	}
+	if _, ok := payload["must_cite_evidence"].(bool); !ok {
+		payload["must_cite_evidence"] = true
+	}
 }
 
-func (s *Service) extractRuntimeDiagnostics(job types.Job, result types.Result) map[string]any {
-	if diagnostics := sanitizeRuntimeDiagnostics(artifactJSONForType(s.runRoot, job.ID, job.Artifacts, "runtime_diagnostics")); len(diagnostics) > 0 {
-		return diagnostics
-	}
-	if diagnostics := sanitizeRuntimeDiagnostics(validationRuntimeDiagnostics(s.runRoot, job.ID, job.Artifacts)); len(diagnostics) > 0 {
-		return diagnostics
-	}
-	if diagnostics := sanitizeRuntimeDiagnostics(runtimeDiagnosticsFromPayload(result.Payload)); len(diagnostics) > 0 {
-		return diagnostics
-	}
-	return nil
-}
-
-func artifactJSONForType(runRoot, jobID string, artifacts []types.Artifact, artifactType string) map[string]any {
-	for _, artifact := range artifacts {
-		if artifact.ArtifactType != artifactType || strings.TrimSpace(artifact.Path) == "" {
-			continue
-		}
-		var payload map[string]any
-		if bytes, err := os.ReadFile(artifact.Path); err == nil && len(bytes) > 0 {
-			if err := json.Unmarshal(bytes, &payload); err == nil {
-				return payload
-			}
-		}
-	}
-	fallbackPath := filepath.Join(runRoot, jobID, artifactType+".json")
-	var payload map[string]any
-	if bytes, err := os.ReadFile(fallbackPath); err == nil && len(bytes) > 0 {
-		if err := json.Unmarshal(bytes, &payload); err == nil {
-			return payload
-		}
-	}
-	return nil
-}
-
-func validationRuntimeDiagnostics(runRoot, jobID string, artifacts []types.Artifact) map[string]any {
-	validation := artifactJSONForType(runRoot, jobID, artifacts, "validation_report")
-	if len(validation) == 0 {
+func mergePayloadMap(base, extra map[string]any) map[string]any {
+	if len(base) == 0 && len(extra) == 0 {
 		return nil
 	}
-	diagnostics, _ := validation["runtime_diagnostics"].(map[string]any)
-	return diagnostics
-}
-
-func runtimeDiagnosticsFromPayload(payload map[string]any) map[string]any {
-	if payload == nil {
-		return nil
+	out := make(map[string]any, len(base)+len(extra))
+	for key, value := range base {
+		out[key] = value
 	}
-	retrieval, _ := payload["retrieval"].(map[string]any)
-	provenance, _ := payload["provenance"].(map[string]any)
-	if len(retrieval) == 0 && len(provenance) == 0 {
-		return nil
-	}
-	diagnostics := map[string]any{}
-	if value := strings.TrimSpace(stringValue(provenance["runtime_backend"])); value != "" {
-		diagnostics["runtime_backend"] = value
-		diagnostics["backend_name"] = value
-	}
-	if value := strings.TrimSpace(stringValue(provenance["model"])); value != "" {
-		diagnostics["selected_model"] = value
-		diagnostics["backend_detail"] = value
-	}
-	if value := strings.TrimSpace(stringValue(provenance["resource_tier"])); value != "" {
-		diagnostics["resource_tier"] = value
-	}
-	if value := strings.TrimSpace(stringValue(retrieval["runtime_backend_mode"])); value != "" {
-		diagnostics["backend_mode"] = value
-	}
-	if value := strings.TrimSpace(stringValue(retrieval["runtime_backend_detail"])); value != "" {
-		diagnostics["backend_detail"] = value
-	}
-	return diagnostics
-}
-
-func sanitizeRuntimeDiagnostics(input map[string]any) map[string]any {
-	if len(input) == 0 {
-		return nil
-	}
-	output := map[string]any{}
-	for _, key := range []string{
-		"runtime_backend",
-		"selected_model",
-		"resource_tier",
-		"backend_name",
-		"backend_mode",
-		"backend_detail",
-		"llm_available",
-		"endpoint_configured",
-		"timeout_seconds",
-		"last_error",
-	} {
-		value, ok := input[key]
-		if !ok {
-			continue
-		}
-		switch typed := value.(type) {
-		case string:
-			if strings.TrimSpace(typed) != "" {
-				output[key] = typed
-			}
-		case bool:
-			output[key] = typed
-		case float64, int, int32, int64:
-			output[key] = typed
-		}
-	}
-	if len(output) == 0 {
-		return nil
-	}
-	return output
-}
-
-func isDegradedLocalExecution(diagnostics map[string]any) bool {
-	mode := strings.ToLower(strings.TrimSpace(stringValue(diagnostics["backend_mode"])))
-	if mode == "" || mode == "real" {
-		return false
-	}
-	return true
-}
-
-func hasRetryRecommendation(job types.Job) bool {
-	rec, ok := retryRecommendationFromResult(job)
-	return ok && rec.Recommended
-}
-
-func deriveExecutionQuality(diagnostics map[string]any, retryRecommended bool) string {
-	if retryRecommended {
-		return "no_real_backend"
-	}
-	mode := strings.ToLower(strings.TrimSpace(stringValue(diagnostics["backend_mode"])))
-	switch mode {
-	case "real":
-		return "real_local"
-	case "heuristic", "fallback", "unavailable", "configured_local_llm":
-		return "degraded_local"
-	default:
-		return ""
-	}
-}
-
-func cloneMap(input map[string]any) map[string]any {
-	if input == nil {
-		return nil
-	}
-	output := make(map[string]any, len(input))
-	for key, value := range input {
-		output[key] = value
-	}
-	return output
-}
-
-func retryRecommendationFromResult(job types.Job) (types.JobRetryRecommendation, bool) {
-	if job.Result == nil {
-		return types.JobRetryRecommendation{}, false
-	}
-	raw, ok := job.Result.Payload["broker_retry_recommendation"].(map[string]any)
-	if !ok {
-		return types.JobRetryRecommendation{}, false
-	}
-	profileMap, ok := raw["execution_profile"].(map[string]any)
-	if !ok {
-		return types.JobRetryRecommendation{}, false
-	}
-	return types.JobRetryRecommendation{
-		JobID:             job.ID,
-		Recommended:       raw["recommended"] == true,
-		Reason:            stringValue(raw["reason"]),
-		TaskType:          stringValue(raw["task_type"]),
-		ExecutionProfile:  executionProfileFromMap(profileMap),
-		PlacementHint:     placementHintFromMap(mapValue(raw["placement_hint"])),
-		SourceResultError: job.ResultError,
-	}, true
-}
-
-func brokerRetryRecommendation(job types.Job) map[string]any {
-	profile := recommendedExecutionProfile(job.Request.ExecutionProfile)
-	placement := recommendedPlacementHint(job, profile)
-	return map[string]any{
-		"recommended":       true,
-		"reason":            "no_real_retrieval_backend",
-		"task_type":         job.TaskType,
-		"execution_profile": profile,
-		"placement_hint":    placement,
-	}
-}
-
-func executionProfileFromMap(value map[string]any) types.ExecutionProfile {
-	return types.ExecutionProfile{
-		Backend:    stringValue(value["backend"]),
-		Tier:       stringValue(value["tier"]),
-		Runtime:    stringValue(value["runtime"]),
-		Model:      stringValue(value["model"]),
-		QOS:        stringValue(value["qos"]),
-		NodeList:   stringValue(value["nodelist"]),
-		Constraint: stringValue(value["constraint"]),
-	}
-}
-
-func placementHintFromMap(value map[string]any) types.PlacementHint {
-	return types.PlacementHint{
-		BackendPreference: stringValue(value["backend_preference"]),
-		TierPreference:    stringValue(value["tier_preference"]),
-		QOS:               stringValue(value["qos"]),
-		NodeList:          stringValue(value["nodelist"]),
-		Constraint:        stringValue(value["constraint"]),
-		Preemptible:       boolValue(value["preemptible"]),
-		Rationale:         stringValue(value["rationale"]),
-	}
-}
-
-func recommendedPlacementHint(job types.Job, profile map[string]any) map[string]any {
-	tier := stringValue(profile["tier"])
-	hint := map[string]any{
-		"backend_preference": stringValue(profile["backend"]),
-		"tier_preference":    tier,
-		"preemptible":        true,
-	}
-	if value := firstNonEmpty(stringValue(profile["nodelist"]), job.Request.ExecutionProfile.NodeList); value != "" {
-		hint["nodelist"] = value
-	}
-	if value := firstNonEmpty(stringValue(profile["constraint"]), job.Request.ExecutionProfile.Constraint); value != "" {
-		hint["constraint"] = value
-	}
-	switch tier {
-	case "p40-rag-compression":
-		hint["qos"] = firstNonEmpty(job.Request.ExecutionProfile.QOS, "scavenger")
-		hint["rationale"] = "Prefer low-contention P40 compression capacity before escalating to premium accelerators."
-	case "a100-reasoning":
-		hint["qos"] = firstNonEmpty(job.Request.ExecutionProfile.QOS, "scavenger")
-		hint["rationale"] = "Escalate to A100 only after lower-cost local retrieval paths failed to produce a real backend result."
-	default:
-		hint["qos"] = firstNonEmpty(job.Request.ExecutionProfile.QOS, "normal")
-		hint["rationale"] = "Use the broker-recommended local tier with non-blocking placement."
-	}
-	return hint
-}
-
-func mergePlacementHintIntoProfile(profile types.ExecutionProfile, hint types.PlacementHint) types.ExecutionProfile {
-	if strings.TrimSpace(hint.BackendPreference) != "" {
-		profile.Backend = hint.BackendPreference
-	}
-	if strings.TrimSpace(hint.TierPreference) != "" {
-		profile.Tier = hint.TierPreference
-	}
-	if strings.TrimSpace(hint.QOS) != "" {
-		profile.QOS = hint.QOS
-	}
-	if strings.TrimSpace(hint.NodeList) != "" {
-		profile.NodeList = hint.NodeList
-	}
-	if strings.TrimSpace(hint.Constraint) != "" {
-		profile.Constraint = hint.Constraint
-	}
-	return profile
-}
-
-func mergePlacementHintIntoTaskParams(taskParams map[string]any, hint types.PlacementHint) map[string]any {
-	if taskParams == nil {
-		taskParams = make(map[string]any)
-	}
-	if strings.TrimSpace(hint.BackendPreference) != "" {
-		taskParams["_broker_retry_backend_preference"] = hint.BackendPreference
-	}
-	if strings.TrimSpace(hint.TierPreference) != "" {
-		taskParams["_broker_retry_tier_preference"] = hint.TierPreference
-	}
-	if strings.TrimSpace(hint.QOS) != "" {
-		taskParams["_broker_retry_qos"] = hint.QOS
-	}
-	if strings.TrimSpace(hint.NodeList) != "" {
-		taskParams["_broker_retry_nodelist"] = hint.NodeList
-	}
-	if strings.TrimSpace(hint.Constraint) != "" {
-		taskParams["_broker_retry_constraint"] = hint.Constraint
-	}
-	taskParams["_broker_retry_preemptible"] = hint.Preemptible
-	if strings.TrimSpace(hint.Rationale) != "" {
-		taskParams["_broker_retry_rationale"] = hint.Rationale
-	}
-	return taskParams
-}
-
-func stringValue(value any) string {
-	if text, ok := value.(string); ok {
-		return strings.TrimSpace(text)
-	}
-	return ""
-}
-
-func mapValue(value any) map[string]any {
-	if out, ok := value.(map[string]any); ok {
-		return out
-	}
-	return map[string]any{}
-}
-
-func boolValue(value any) bool {
-	if out, ok := value.(bool); ok {
-		return out
-	}
-	return false
-}
-
-func recommendedExecutionProfile(current types.ExecutionProfile) map[string]any {
-	tier := strings.TrimSpace(current.Tier)
-	nextTier := "p40-rag-compression"
-	switch tier {
-	case "cpu-rag-indexing":
-		nextTier = "p40-rag-compression"
-	case "p40-rag-compression":
-		nextTier = "a100-reasoning"
-	case "a100-reasoning":
-		nextTier = "a100-reasoning"
-	}
-	backend := strings.TrimSpace(current.Backend)
-	if backend == "" {
-		backend = "slurm"
-	}
-	runtime := strings.TrimSpace(current.Runtime)
-	if runtime == "" {
-		runtime = "llama.cpp"
-	}
-	return map[string]any{
-		"backend":    backend,
-		"tier":       nextTier,
-		"runtime":    runtime,
-		"nodelist":   strings.TrimSpace(current.NodeList),
-		"constraint": strings.TrimSpace(current.Constraint),
-	}
-}
-
-func isRAGLikeTask(taskType string) bool {
-	switch taskType {
-	case "rag_compress", "debug_with_local_context", "summarize_logs", "inspect_repo", "propose_patch":
-		return true
-	default:
-		return false
-	}
-}
-
-func hasAnyString(items []string, expected []string) bool {
-	lookup := make(map[string]struct{}, len(items))
-	for _, item := range items {
-		lookup[item] = struct{}{}
-	}
-	for _, item := range expected {
-		if _, ok := lookup[item]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-func collectStringSlice(value any) []string {
-	switch typed := value.(type) {
-	case []string:
-		return append([]string(nil), typed...)
-	case []any:
-		out := make([]string, 0, len(typed))
-		for _, item := range typed {
-			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
-				out = append(out, text)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-func appendUniqueString(values []string, value string) []string {
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
-}
-
-func stringSliceToAny(values []string) []any {
-	out := make([]any, 0, len(values))
-	for _, value := range values {
-		out = append(out, value)
+	for key, value := range extra {
+		out[key] = value
 	}
 	return out
 }
 
-func (s *Service) stageExecutionBundle(ctx context.Context, job types.Job) error {
-	jobDir := filepath.Join(s.runRoot, job.ID)
-	if err := os.MkdirAll(jobDir, 0o755); err != nil {
-		return err
+func defaultAgentNextAction(taskType string) string {
+	switch taskType {
+	case "inspect_repo":
+		return "Answer from the cited files and line ranges, and call out the most relevant subsystem or symbol first."
+	case "debug_with_local_context":
+		return "Lead with the highest-confidence root cause candidate, then verify the cited code and logs before proposing a fix."
+	case "summarize_logs":
+		return "Summarize the dominant failure cluster first, then use the cited log evidence to guide the next debugging step."
+	case "propose_patch":
+		return "Keep the fix scoped to the cited files and validate it against the referenced evidence before changing code."
+	default:
+		return "Use the cited evidence directly in the answer and avoid claims that are not supported by the released refs."
 	}
-
-	jobSpecPath := filepath.Join(jobDir, "job_spec.json")
-	executionPlanPath := filepath.Join(jobDir, "execution_plan.json")
-	inputManifestPath := filepath.Join(jobDir, "input_manifest.json")
-
-	if err := writeJSONFile(jobSpecPath, map[string]any{
-		"job_id":        job.ID,
-		"task_type":     job.TaskType,
-		"task_params":   s.executionTaskParams(job),
-		"output_schema": job.Request.OutputSchema,
-		"constraints":   job.Request.Constraints,
-	}); err != nil {
-		return err
-	}
-	if err := writeJSONFile(executionPlanPath, map[string]any{
-		"job_id":             job.ID,
-		"task_type":          job.TaskType,
-		"execution_profile":  job.Request.ExecutionProfile,
-		"selected_model":     job.Request.ExecutionProfile.Model,
-		"runtime_backend":    job.Request.ExecutionProfile.Runtime,
-		"resource_tier":      job.Request.ExecutionProfile.Tier,
-		"runtime_connection": s.runtimeConnectionPlan(job.Request.ExecutionProfile),
-	}); err != nil {
-		return err
-	}
-
-	resolvedInputRefs, err := s.resolveInputRefs(ctx, job)
-	if err != nil {
-		return err
-	}
-
-	if err := writeJSONFile(inputManifestPath, map[string]any{
-		"job_id":     job.ID,
-		"input_refs": resolvedInputRefs,
-	}); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (s *Service) executionTaskParams(job types.Job) map[string]any {
-	taskParams := cloneTaskParams(job.Request.TaskParams)
-	taskParams["_broker_exclude_dirs"] = stringSliceToAny(defaultBrokerExcludedDirs())
-	return taskParams
-}
-
-func defaultBrokerExcludedDirs() []string {
-	return []string{
-		".git",
-		".broker",
-		"__pycache__",
-		".pytest_cache",
-		".mypy_cache",
-		".ruff_cache",
-		".tox",
-		".venv",
-		"venv",
-		"env",
-		"node_modules",
-		"site-packages",
-		"build",
-		"dist",
-	}
-}
-
-func defaultModelProfiles() modelProfiles {
-	return modelProfiles{
-		p40:  "gpt-oss-20b.p40",
-		a100: "qwen3-coder-30b.a100",
-	}
-}
-
-func defaultRuntimeProfiles() runtimeProfiles {
-	return runtimeProfiles{
-		llamaCPP: runtimeConnection{TimeoutSeconds: 20},
-		vllm:     runtimeConnection{TimeoutSeconds: 20},
-		sglang:   runtimeConnection{TimeoutSeconds: 20},
-	}
-}
-
-func (s *Service) applyExecutionProfileDefaults(profile types.ExecutionProfile) types.ExecutionProfile {
-	switch strings.TrimSpace(profile.Tier) {
-	case "cpu-rag-indexing":
-		if strings.TrimSpace(profile.Runtime) == "" {
-			profile.Runtime = "deterministic"
-		}
-		if strings.TrimSpace(profile.Model) == "" {
-			profile.Model = s.models.cpu
-		}
-	case "p40-rag-compression":
-		if strings.TrimSpace(profile.Runtime) == "" {
-			profile.Runtime = "llama.cpp"
-		}
-		if strings.TrimSpace(profile.Model) == "" {
-			profile.Model = s.models.p40
-		}
-	case "a100-reasoning":
-		if strings.TrimSpace(profile.Runtime) == "" {
-			profile.Runtime = "llama.cpp"
-		}
-		if strings.TrimSpace(profile.Model) == "" {
-			profile.Model = s.models.a100
-		}
-	}
-	return profile
-}
-
-func (s *Service) runtimeConnectionPlan(profile types.ExecutionProfile) map[string]any {
-	runtimeName := strings.TrimSpace(profile.Runtime)
-	connection := runtimeConnection{}
-	switch runtimeName {
-	case "llama.cpp":
-		connection = s.runtimes.llamaCPP
-	case "vllm":
-		connection = s.runtimes.vllm
-	case "sglang":
-		connection = s.runtimes.sglang
-	}
-	return map[string]any{
-		"base_url":        strings.TrimSpace(connection.BaseURL),
-		"timeout_seconds": connection.TimeoutSeconds,
-	}
-}
-
-func (s *Service) resolveInputRefs(ctx context.Context, job types.Job) ([]types.InputRef, error) {
-	if len(job.Request.InputRefs) == 0 {
-		return nil, nil
-	}
-	principal := auth.PrincipalFromContext(ctx)
-	resolved := make([]types.InputRef, 0, len(job.Request.InputRefs))
-	for _, input := range job.Request.InputRefs {
-		cloned := input
-		if !isArtifactInputRef(input) {
-			resolved = append(resolved, cloned)
-			continue
-		}
-		artifactID := strings.TrimSpace(strings.TrimPrefix(input.URI, "artifact://"))
-		if artifactID == "" {
-			return nil, fmt.Errorf("artifact input uri %q is missing an artifact id", input.URI)
-		}
-		meta, err := s.resolveArtifactRef(ctx, principal, job, artifactID)
-		if err != nil {
-			return nil, err
-		}
-		cloned.Metadata = mergeMetadata(cloned.Metadata, meta)
-		resolved = append(resolved, cloned)
-	}
-	return resolved, nil
-}
-
-func (s *Service) resolveArtifactRef(ctx context.Context, principal auth.Principal, requestingJob types.Job, artifactID string) (map[string]any, error) {
-	jobs, err := s.store.ListJobs(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list jobs for artifact resolution: %w", err)
-	}
-	sort.SliceStable(jobs, func(i, j int) bool {
-		return jobs[i].SubmittedAt.After(jobs[j].SubmittedAt)
-	})
-	for _, candidate := range jobs {
-		if candidate.ID == requestingJob.ID {
-			continue
-		}
-		if !artifactJobAccessible(principal, requestingJob, candidate) {
-			continue
-		}
-		for _, artifact := range candidate.Artifacts {
-			if artifact.ArtifactID != artifactID {
-				continue
-			}
-			resolvedPath := resolveArtifactPath(s.runRoot, candidate.ID, artifact.Path)
-			if resolvedPath != "" {
-				if _, statErr := os.Stat(resolvedPath); statErr != nil {
-					return nil, fmt.Errorf("artifact %s path %q is unavailable: %w", artifactID, resolvedPath, statErr)
-				}
-			}
-			return map[string]any{
-				"artifact_id":        artifact.ArtifactID,
-				"artifact_type":      artifact.ArtifactType,
-				"source_job_id":      candidate.ID,
-				"resolved_path":      resolvedPath,
-				"classification":     firstNonEmpty(artifact.Classification, requestingJob.Request.Constraints.Confidentiality),
-				"source_result_name": resultSchemaName(candidate.Result),
-			}, nil
-		}
-	}
-	return nil, fmt.Errorf("artifact %s not found in accessible broker jobs", artifactID)
-}
-
-func artifactJobAccessible(principal auth.Principal, requestingJob, candidate types.Job) bool {
-	if auth.IsAdmin(principal) {
-		return true
-	}
-	if requestingJob.SubmittedBy != "" && candidate.SubmittedBy != "" {
-		return requestingJob.SubmittedBy == candidate.SubmittedBy
-	}
-	if principal.Actor != "" {
-		if candidate.SubmittedBy == "" {
-			return true
-		}
-		return principal.Actor == candidate.SubmittedBy
-	}
-	return candidate.SubmittedBy == ""
-}
-
-func resolveArtifactPath(runRoot, jobID, artifactPath string) string {
-	if strings.TrimSpace(artifactPath) == "" {
-		return ""
-	}
-	if filepath.IsAbs(artifactPath) {
-		return artifactPath
-	}
-	return filepath.Join(runRoot, jobID, artifactPath)
-}
-
-func isArtifactInputRef(input types.InputRef) bool {
-	return input.Type == "artifact" || strings.HasPrefix(input.URI, "artifact://")
 }
 
 func mergeMetadata(base, extra map[string]any) map[string]any {
@@ -1932,11 +1095,11 @@ func resultSchemaName(result *types.Result) string {
 }
 
 func writeJSONFile(path string, payload any) error {
-	data, err := json.MarshalIndent(payload, "", "  ")
+	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(path, data, 0o600)
 }
 
 func cloneTaskParams(in map[string]any) map[string]any {
@@ -2007,582 +1170,6 @@ func retrySubmitRequest(job types.Job) types.SubmitJobRequest {
 	return req
 }
 
-func (s *Service) submitRetriedReducer(ctx context.Context, reducer types.Job, effectiveChildren []types.Job) (*types.SubmitJobResponse, error) {
-	childJobIDs := make([]string, 0, len(effectiveChildren))
-	childBackendRunIDs := make([]string, 0, len(effectiveChildren))
-	for _, child := range effectiveChildren {
-		childJobIDs = append(childJobIDs, child.ID)
-		if child.BackendRunID != "" {
-			childBackendRunIDs = append(childBackendRunIDs, child.BackendRunID)
-		}
-	}
-
-	reducerReq := retrySubmitRequest(reducer)
-	reducerReq.TaskParams["child_job_ids"] = append([]string(nil), childJobIDs...)
-	reducerReq.TaskParams["root_job_id"] = reducer.RootJobID
-	reducerReq.TaskParams["_dependency_backend_run_ids"] = append([]string(nil), childBackendRunIDs...)
-
-	resp, err := s.SubmitJob(ctx, reducerReq)
-	if err != nil {
-		return nil, err
-	}
-	return &resp, nil
-}
-
-func (s *Service) submitStoredReducer(ctx context.Context, reducer types.Job, effectiveChildren []types.Job) error {
-	childJobIDs := make([]string, 0, len(effectiveChildren))
-	childBackendRunIDs := make([]string, 0, len(effectiveChildren))
-	for _, child := range effectiveChildren {
-		childJobIDs = append(childJobIDs, child.ID)
-		if child.BackendRunID != "" {
-			childBackendRunIDs = append(childBackendRunIDs, child.BackendRunID)
-		}
-	}
-
-	reducer.Request.TaskParams = cloneTaskParams(reducer.Request.TaskParams)
-	reducer.Request.TaskParams["child_job_ids"] = append([]string(nil), childJobIDs...)
-	reducer.Request.TaskParams["root_job_id"] = reducer.RootJobID
-	reducer.Request.TaskParams["_dependency_backend_run_ids"] = append([]string(nil), childBackendRunIDs...)
-	if err := s.stageExecutionBundle(ctx, reducer); err != nil {
-		return err
-	}
-	submitResp, err := s.backend.SubmitRun(ctx, reducer)
-	if err != nil {
-		return err
-	}
-	reducer.State = submitResp.InitialState
-	reducer.BackendKind = submitResp.BackendKind
-	reducer.BackendRunID = submitResp.BackendRunID
-	reducer.UpdatedAt = time.Now().UTC()
-	return s.store.UpdateJob(ctx, reducer)
-}
-
-func (s *Service) createDeferredReducer(ctx context.Context, req types.SubmitJobRequest) (*types.SubmitJobResponse, error) {
-	now := time.Now().UTC()
-	principal := auth.PrincipalFromContext(ctx)
-	jobID := newJobID()
-	orchestration := normalizeOrchestration(jobID, req.Orchestration)
-	job := types.Job{
-		ID:            jobID,
-		TaskType:      req.TaskType,
-		State:         types.JobStateDispatching,
-		SubmittedBy:   principal.Actor,
-		Request:       req,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-		SubmittedAt:   now,
-		ParentJobID:   orchestration.ParentJobID,
-		RootJobID:     orchestration.RootJobID,
-		Orchestration: orchestration,
-	}
-	if err := s.stageExecutionBundle(ctx, job); err != nil {
-		return nil, err
-	}
-	if err := s.store.CreateJob(ctx, job); err != nil {
-		return nil, err
-	}
-	s.audit(ctx, "job.submit", "success", &job, map[string]any{
-		"backend_kind": job.BackendKind,
-	})
-	resp := types.SubmitJobResponse{
-		JobID:     job.ID,
-		State:     job.State,
-		Cache:     types.CacheStatus{Status: job.CacheStatus},
-		StatusURL: "/v1/jobs/" + job.ID,
-	}
-	return &resp, nil
-}
-
-type dispatchReleaseResult struct {
-	ReleasedChunks   int
-	ReleasedChildren int
-	ReducerReleased  bool
-}
-
-func (s *Service) releaseDispatchingRootChildren(ctx context.Context, rootJobID string, maxAdditionalBatches int, forced bool) (dispatchReleaseResult, error) {
-	result := dispatchReleaseResult{}
-	if strings.TrimSpace(rootJobID) == "" {
-		return result, nil
-	}
-	jobs, err := s.store.ListJobs(ctx)
-	if err != nil {
-		return result, err
-	}
-	rootJobs := make([]types.Job, 0, len(jobs))
-	for _, job := range jobs {
-		if job.RootJobID == rootJobID {
-			rootJobs = append(rootJobs, job)
-		}
-	}
-	if len(rootJobs) == 0 {
-		return result, nil
-	}
-	if err := s.refreshRootJobsForDispatch(ctx, rootJobs); err != nil {
-		return result, err
-	}
-	jobs, err = s.store.ListJobs(ctx)
-	if err != nil {
-		return result, err
-	}
-	rootJobs = rootJobs[:0]
-	for _, job := range jobs {
-		if job.RootJobID == rootJobID {
-			rootJobs = append(rootJobs, job)
-		}
-	}
-
-	activeChunks := activeDispatchChunks(rootJobs)
-	slots := availableRootBatchSlots(s.options.ParallelMaxActiveBatches, len(activeChunks))
-	if maxAdditionalBatches > 0 {
-		slots = maxAdditionalBatches
-	}
-	if slots > 0 {
-		dispatchingChildren := dispatchingChildrenByChunk(rootJobs)
-		chunkIndexes := sortedChunkIndexes(dispatchingChildren)
-		for _, chunkIndex := range chunkIndexes {
-			if slots == 0 {
-				break
-			}
-			chunkJobs := dispatchingChildren[chunkIndex]
-			if len(chunkJobs) == 0 {
-				continue
-			}
-			if err := s.submitStoredChunk(ctx, chunkJobs, forced); err != nil {
-				return result, err
-			}
-			result.ReleasedChunks++
-			result.ReleasedChildren += len(chunkJobs)
-			slots--
-		}
-	}
-
-	if hasDispatchingChildrenForJobs(rootJobs) {
-		return result, nil
-	}
-
-	reducers := effectiveReducerJobs(rootJobs)
-	for _, reducer := range reducers {
-		if reducer.State == types.JobStateDispatching && reducer.BackendRunID == "" {
-			effectiveChildren := effectiveShardJobs(rootJobs, false)
-			if err := s.submitStoredReducer(ctx, reducer, effectiveChildren); err != nil {
-				return result, err
-			}
-			result.ReducerReleased = true
-			return result, nil
-		}
-	}
-	return result, nil
-}
-
-func (s *Service) refreshRootJobsForDispatch(ctx context.Context, jobs []types.Job) error {
-	for _, job := range jobs {
-		if job.BackendRunID == "" || isTerminal(job.State) {
-			continue
-		}
-		runStatus, err := s.backend.GetRun(ctx, job.BackendRunID)
-		if err != nil || runStatus.State == "" || runStatus.State == job.State {
-			continue
-		}
-		job.State = runStatus.State
-		job.BackendState = runStatus.RawState
-		job.BackendExitCode = runStatus.ExitCode
-		now := time.Now().UTC()
-		job.UpdatedAt = now
-		if runStatus.State == types.JobStateRunning && job.StartedAt == nil {
-			job.StartedAt = &now
-		}
-		if isTerminal(runStatus.State) {
-			job.CompletedAt = &now
-		}
-		if err := s.store.UpdateJob(ctx, job); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) submitStoredChunk(ctx context.Context, chunkJobs []types.Job, forced bool) error {
-	if len(chunkJobs) == 0 {
-		return nil
-	}
-	if len(chunkJobs) == 1 {
-		if forced {
-			chunkJobs[0].Request.TaskParams = cloneTaskParams(chunkJobs[0].Request.TaskParams)
-			chunkJobs[0].Request.TaskParams["_broker_forced_release"] = true
-		}
-		submitResp, err := s.backend.SubmitRun(ctx, chunkJobs[0])
-		if err != nil {
-			return fmt.Errorf("submit child shard %d: %w", shardIndexOf(chunkJobs[0]), err)
-		}
-		return s.applyStoredSubmission(ctx, chunkJobs[0], submitResp)
-	}
-	if batchBackend, ok := s.backend.(backends.BatchBackend); ok {
-		if forced {
-			for i := range chunkJobs {
-				chunkJobs[i].Request.TaskParams = cloneTaskParams(chunkJobs[i].Request.TaskParams)
-				chunkJobs[i].Request.TaskParams["_broker_forced_release"] = true
-			}
-		}
-		submitResps, err := batchBackend.SubmitRunBatch(ctx, chunkJobs)
-		if err != nil {
-			return fmt.Errorf("submit child batch chunk %d: %w", dispatchChunkIndex(chunkJobs[0]), err)
-		}
-		if len(submitResps) != len(chunkJobs) {
-			return fmt.Errorf("submit child batch chunk %d: expected %d responses, got %d", dispatchChunkIndex(chunkJobs[0]), len(chunkJobs), len(submitResps))
-		}
-		for i := range chunkJobs {
-			if err := s.applyStoredSubmission(ctx, chunkJobs[i], submitResps[i]); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	for _, job := range chunkJobs {
-		if forced {
-			job.Request.TaskParams = cloneTaskParams(job.Request.TaskParams)
-			job.Request.TaskParams["_broker_forced_release"] = true
-		}
-		submitResp, err := s.backend.SubmitRun(ctx, job)
-		if err != nil {
-			return fmt.Errorf("submit child shard %d: %w", shardIndexOf(job), err)
-		}
-		if err := s.applyStoredSubmission(ctx, job, submitResp); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) applyStoredSubmission(ctx context.Context, job types.Job, submitResp backends.SubmitResponse) error {
-	job.State = submitResp.InitialState
-	job.BackendKind = submitResp.BackendKind
-	job.BackendRunID = submitResp.BackendRunID
-	job.UpdatedAt = time.Now().UTC()
-	return s.store.UpdateJob(ctx, job)
-}
-
-func effectiveShardJobs(jobs []types.Job, includeCancelled bool) []types.Job {
-	grouped := make(map[string][]types.Job)
-	for _, job := range jobs {
-		if orchestrationStrategyOf(job) == "aggregator" {
-			continue
-		}
-		grouped[shardAttemptKey(job)] = append(grouped[shardAttemptKey(job)], job)
-	}
-	effective := make([]types.Job, 0, len(grouped))
-	for _, attempts := range grouped {
-		effective = append(effective, selectEffectiveAttempt(attempts, includeCancelled))
-	}
-	sort.SliceStable(effective, func(i, j int) bool {
-		if shardIndexOf(effective[i]) != shardIndexOf(effective[j]) {
-			return shardIndexOf(effective[i]) < shardIndexOf(effective[j])
-		}
-		if shardKeyOf(effective[i]) != shardKeyOf(effective[j]) {
-			return shardKeyOf(effective[i]) < shardKeyOf(effective[j])
-		}
-		return jobMoreRecent(effective[i], effective[j])
-	})
-	return effective
-}
-
-func effectiveReducerJobs(jobs []types.Job) []types.Job {
-	grouped := make(map[string][]types.Job)
-	for _, job := range jobs {
-		if orchestrationStrategyOf(job) != "aggregator" {
-			continue
-		}
-		grouped[reducerAttemptKey(job)] = append(grouped[reducerAttemptKey(job)], job)
-	}
-	effective := make([]types.Job, 0, len(grouped))
-	for _, attempts := range grouped {
-		effective = append(effective, selectEffectiveAttempt(attempts, false))
-	}
-	sort.SliceStable(effective, func(i, j int) bool {
-		if aggregationKeyOf(effective[i]) != aggregationKeyOf(effective[j]) {
-			return aggregationKeyOf(effective[i]) < aggregationKeyOf(effective[j])
-		}
-		return jobMoreRecent(effective[i], effective[j])
-	})
-	return effective
-}
-
-func activeDispatchChunks(jobs []types.Job) map[int]struct{} {
-	active := make(map[int]struct{})
-	for _, job := range jobs {
-		if orchestrationStrategyOf(job) == "aggregator" {
-			continue
-		}
-		if job.BackendRunID == "" {
-			continue
-		}
-		if isTerminal(job.State) {
-			continue
-		}
-		active[dispatchChunkIndex(job)] = struct{}{}
-	}
-	return active
-}
-
-func dispatchObservability(jobs []types.Job) (dispatchingChildren, pendingChildren, activeChunks, pendingChunks int) {
-	active := activeDispatchChunks(jobs)
-	pending := dispatchingChildrenByChunk(jobs)
-	for _, job := range jobs {
-		if orchestrationStrategyOf(job) == "aggregator" {
-			continue
-		}
-		if job.State == types.JobStateDispatching {
-			dispatchingChildren++
-			if job.BackendRunID == "" {
-				pendingChildren++
-			}
-		}
-	}
-	return dispatchingChildren, pendingChildren, len(active), len(pending)
-}
-
-type rootActionUsageSummary struct {
-	ForcedReleasedChunks int
-	RetriedShardActions  int
-}
-
-func rootActionUsage(jobs []types.Job) rootActionUsageSummary {
-	usage := rootActionUsageSummary{}
-	forcedChunks := make(map[int]struct{})
-	for _, job := range jobs {
-		if taskParamBool(job, "_broker_retry_action") {
-			usage.RetriedShardActions++
-		}
-		if taskParamBool(job, "_broker_forced_release") {
-			forcedChunks[dispatchChunkIndex(job)] = struct{}{}
-		}
-	}
-	usage.ForcedReleasedChunks = len(forcedChunks)
-	return usage
-}
-
-func availableRootBatchSlots(maxActiveBatches, currentActive int) int {
-	if maxActiveBatches <= 0 {
-		return int(^uint(0) >> 1)
-	}
-	if currentActive >= maxActiveBatches {
-		return 0
-	}
-	return maxActiveBatches - currentActive
-}
-
-func dispatchingChildrenByChunk(jobs []types.Job) map[int][]types.Job {
-	grouped := make(map[int][]types.Job)
-	for _, job := range jobs {
-		if orchestrationStrategyOf(job) == "aggregator" {
-			continue
-		}
-		if job.State != types.JobStateDispatching || job.BackendRunID != "" {
-			continue
-		}
-		grouped[dispatchChunkIndex(job)] = append(grouped[dispatchChunkIndex(job)], job)
-	}
-	return grouped
-}
-
-func sortedChunkIndexes(grouped map[int][]types.Job) []int {
-	indexes := make([]int, 0, len(grouped))
-	for index := range grouped {
-		indexes = append(indexes, index)
-	}
-	sort.Ints(indexes)
-	return indexes
-}
-
-func hasDispatchingChildrenForJobs(jobs []types.Job) bool {
-	for _, job := range jobs {
-		if orchestrationStrategyOf(job) == "aggregator" {
-			continue
-		}
-		if job.State == types.JobStateDispatching && job.BackendRunID == "" {
-			return true
-		}
-	}
-	return false
-}
-
-func hasDispatchingChildrenForJobIDs(ctx context.Context, jobStore store.JobStore, jobIDs []string) bool {
-	for _, jobID := range jobIDs {
-		job, err := jobStore.GetJob(ctx, jobID)
-		if err != nil {
-			continue
-		}
-		if orchestrationStrategyOf(job) == "aggregator" {
-			continue
-		}
-		if job.State == types.JobStateDispatching && job.BackendRunID == "" {
-			return true
-		}
-	}
-	return false
-}
-
-func selectEffectiveAttempt(attempts []types.Job, includeCancelled bool) types.Job {
-	ordered := append([]types.Job(nil), attempts...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return jobMoreRecent(ordered[i], ordered[j])
-	})
-	for _, job := range ordered {
-		if !isTerminal(job.State) {
-			return job
-		}
-	}
-	for _, job := range ordered {
-		if job.State == types.JobStateSucceeded {
-			return job
-		}
-	}
-	for _, job := range ordered {
-		if shouldRetryShard(job, includeCancelled) || job.State == types.JobStateCancelled {
-			return job
-		}
-	}
-	return ordered[0]
-}
-
-func shouldRetryShard(job types.Job, includeCancelled bool) bool {
-	switch job.State {
-	case types.JobStateFailed, types.JobStatePreempted, types.JobStateTimedOut:
-		return true
-	case types.JobStateCancelled:
-		return includeCancelled
-	default:
-		return false
-	}
-}
-
-func retrySkipReason(job types.Job, includeCancelled bool) string {
-	switch {
-	case !isTerminal(job.State):
-		return "in_progress"
-	case job.State == types.JobStateSucceeded:
-		return "already_succeeded"
-	case job.State == types.JobStateCancelled && !includeCancelled:
-		return "cancelled_excluded"
-	case shouldRetryShard(job, includeCancelled):
-		return "not_retried"
-	default:
-		return "not_retryable"
-	}
-}
-
-func dispatchChunkIndex(job types.Job) int {
-	if job.Request.TaskParams == nil {
-		return 0
-	}
-	switch typed := job.Request.TaskParams["_broker_dispatch_chunk"].(type) {
-	case int:
-		return typed
-	case int64:
-		return int(typed)
-	case float64:
-		return int(typed)
-	default:
-		return 0
-	}
-}
-
-func taskParamBool(job types.Job, key string) bool {
-	if job.Request.TaskParams == nil {
-		return false
-	}
-	value, ok := job.Request.TaskParams[key]
-	if !ok {
-		return false
-	}
-	typed, ok := value.(bool)
-	return ok && typed
-}
-
-func shardAttemptKey(job types.Job) string {
-	return strings.Join([]string{
-		job.TaskType,
-		orchestrationStrategyOf(job),
-		shardKeyOf(job),
-		fmt.Sprintf("%d", shardIndexOf(job)),
-		fmt.Sprintf("%d", shardCountOf(job)),
-		aggregationKeyOf(job),
-	}, "|")
-}
-
-func reducerAttemptKey(job types.Job) string {
-	return strings.Join([]string{
-		job.TaskType,
-		orchestrationStrategyOf(job),
-		aggregationKeyOf(job),
-	}, "|")
-}
-
-func orchestrationStrategyOf(job types.Job) string {
-	if job.Orchestration == nil {
-		return ""
-	}
-	return strings.TrimSpace(job.Orchestration.Strategy)
-}
-
-func shardKeyOf(job types.Job) string {
-	if job.Orchestration == nil {
-		return ""
-	}
-	return strings.TrimSpace(job.Orchestration.ShardKey)
-}
-
-func shardIndexOf(job types.Job) int {
-	if job.Orchestration == nil {
-		return 0
-	}
-	return job.Orchestration.ShardIndex
-}
-
-func shardCountOf(job types.Job) int {
-	if job.Orchestration == nil {
-		return 0
-	}
-	return job.Orchestration.ShardCount
-}
-
-func aggregationKeyOf(job types.Job) string {
-	if job.Orchestration == nil {
-		return ""
-	}
-	return strings.TrimSpace(job.Orchestration.AggregationKey)
-}
-
-func dependsOnJobIDsOf(job types.Job) []string {
-	if job.Orchestration == nil {
-		return nil
-	}
-	return append([]string(nil), job.Orchestration.DependsOnJobIDs...)
-}
-
-func jobMoreRecent(a, b types.Job) bool {
-	if !a.CreatedAt.Equal(b.CreatedAt) {
-		return a.CreatedAt.After(b.CreatedAt)
-	}
-	if !a.UpdatedAt.Equal(b.UpdatedAt) {
-		return a.UpdatedAt.After(b.UpdatedAt)
-	}
-	return a.ID > b.ID
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func appendIfNonEmpty(in []string, value string) []string {
-	if strings.TrimSpace(value) == "" {
-		return in
-	}
-	return append(in, strings.TrimSpace(value))
-}
-
 func remainingNonAdminBudget(limit, used int, principal auth.Principal) int {
 	if auth.IsAdmin(principal) {
 		return 0
@@ -2592,170 +1179,6 @@ func remainingNonAdminBudget(limit, used int, principal auth.Principal) int {
 		return 0
 	}
 	return remaining
-}
-
-func (s *Service) audit(ctx context.Context, action, outcome string, job *types.Job, fields map[string]any) {
-	principal := auth.PrincipalFromContext(ctx)
-	event := audit.Event{
-		Actor:   principal.Actor,
-		Role:    principal.Role,
-		Action:  action,
-		Outcome: outcome,
-		Fields:  fields,
-	}
-	if job != nil {
-		event.JobID = job.ID
-		event.TaskType = job.TaskType
-	}
-	_ = s.auditLogger.Log(ctx, event)
-}
-
-func (s *Service) auditDeniedLookup(ctx context.Context, action, jobID string, err error) {
-	outcome := "error"
-	if errors.Is(err, authz.ErrForbidden) {
-		outcome = "forbidden"
-	} else if errors.Is(err, store.ErrNotFound) {
-		outcome = "not_found"
-	}
-	s.audit(ctx, action, outcome, &types.Job{ID: jobID}, map[string]any{
-		"error": err.Error(),
-	})
-}
-
-func (s *Service) auditAndReturnLogs(ctx context.Context, job types.Job, stream string, maxBytes int) error {
-	s.audit(ctx, "job.fetch_logs", "success", &job, map[string]any{
-		"stream":    stream,
-		"max_bytes": maxBytes,
-	})
-	return nil
-}
-
-func readLogFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-		return "", err
-	}
-	return string(data), nil
-}
-
-func combineLogs(stdoutText, stderrText string) (string, []string) {
-	parts := make([]string, 0, 2)
-	sourceRefs := make([]string, 0, 2)
-	if stdoutText != "" {
-		parts = append(parts, "== stdout ==\n"+strings.TrimRight(stdoutText, "\n"))
-		sourceRefs = append(sourceRefs, "stdout.log")
-	}
-	if stderrText != "" {
-		parts = append(parts, "== stderr ==\n"+strings.TrimRight(stderrText, "\n"))
-		sourceRefs = append(sourceRefs, "stderr.log")
-	}
-	return strings.Join(parts, "\n\n"), sourceRefs
-}
-
-var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(bearer\s+)([A-Za-z0-9._-]+)`),
-	regexp.MustCompile(`(?i)(token=)([^&\s]+)`),
-	regexp.MustCompile(`(?i)(api[_-]?key=)([^&\s]+)`),
-}
-
-func redactLogContent(content string) string {
-	redacted := content
-	for _, pattern := range secretPatterns {
-		redacted = pattern.ReplaceAllString(redacted, `${1}[REDACTED]`)
-	}
-	return redacted
-}
-
-func truncateLogContent(content string, maxBytes int) (string, bool) {
-	if maxBytes <= 0 || len(content) <= maxBytes {
-		return content, false
-	}
-	const suffix = "\n[TRUNCATED]\n"
-	if maxBytes <= len(suffix) {
-		return suffix[:maxBytes], true
-	}
-	return content[:maxBytes-len(suffix)] + suffix, true
-}
-
-func progressEquals(a, b *types.ProgressInfo) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	if a.State != b.State || a.Phase != b.Phase || a.Percent != b.Percent || a.Message != b.Message {
-		return false
-	}
-	if !timePtrEqual(a.Timestamp, b.Timestamp) {
-		return false
-	}
-	aMetrics, _ := json.Marshal(a.Metrics)
-	bMetrics, _ := json.Marshal(b.Metrics)
-	return string(aMetrics) == string(bMetrics)
-}
-
-func progressNewer(current, previous *types.ProgressInfo) bool {
-	if current == nil {
-		return false
-	}
-	if previous == nil {
-		return true
-	}
-	if current.LastUpdated != nil && previous.LastUpdated != nil {
-		return current.LastUpdated.After(*previous.LastUpdated)
-	}
-	if current.Timestamp != nil && previous.Timestamp != nil {
-		return current.Timestamp.After(*previous.Timestamp)
-	}
-	return false
-}
-
-func setKeys(values map[string]struct{}) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-func aggregateRootState(status types.RootJobStatus) types.JobState {
-	if status.ReducerJobID != "" && status.ReducerState != "" {
-		return status.ReducerState
-	}
-	if status.RunningJobs > 0 {
-		return types.JobStateRunning
-	}
-	if status.FailedJobs > 0 {
-		return types.JobStateFailed
-	}
-	if status.QueuedJobs > 0 {
-		return types.JobStateQueued
-	}
-	if status.CancelledJobs == status.TotalJobs {
-		return types.JobStateCancelled
-	}
-	if status.SucceededJobs == status.TotalJobs {
-		return types.JobStateSucceeded
-	}
-	return types.JobStateQueued
-}
-
-func applyReducerMetrics(status *types.RootJobStatus, result *types.Result) {
-	if status == nil || result == nil || result.Payload == nil {
-		return
-	}
-	raw, ok := result.Payload["aggregate_metrics"].(map[string]any)
-	if !ok {
-		return
-	}
-	status.ChildrenTotal = intFromAny(raw["children_total"])
-	status.ChildrenSucceeded = intFromAny(raw["children_succeeded"])
-	status.ChildrenFailed = intFromAny(raw["children_failed"])
-	status.CoverageFraction = floatFromAny(raw["coverage_fraction"])
 }
 
 func intFromAny(value any) int {
@@ -2782,11 +1205,4 @@ func floatFromAny(value any) float64 {
 	default:
 		return 0
 	}
-}
-
-func timePtrEqual(a, b *time.Time) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.Equal(*b)
 }

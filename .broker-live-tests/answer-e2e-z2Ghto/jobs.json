@@ -1,0 +1,57 @@
+{
+  "job_4ae7df154e271205": {
+    "job_id": "job_4ae7df154e271205",
+    "task_type": "inspect_repo",
+    "state": "running",
+    "submitted_by": "anonymous",
+    "request": {
+      "task_type": "inspect_repo",
+      "input_refs": [
+        {
+          "type": "repo",
+          "uri": "file:///gpfs/mskmind_ess/limr/repos/local-ai-broker/.broker-live-tests/e2e-fixture-shared"
+        }
+      ],
+      "task_params": {
+        "_broker_repo_root": "/gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker",
+        "_broker_run_root": "/gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker/.broker-live-tests/answer-e2e-z2Ghto/runs",
+        "mode": "answer",
+        "query": "Where is the GPU service control plane started for the broker transports?"
+      },
+      "constraints": {},
+      "execution_profile": {
+        "tier": "cpu-rag-indexing",
+        "runtime": "deterministic",
+        "qos": "premium"
+      },
+      "orchestration": {},
+      "output_schema": {
+        "name": "repo_inspection_v2"
+      }
+    },
+    "degraded_local_execution": false,
+    "retry_recommended": false,
+    "progress": {
+      "state": "running",
+      "phase": "gpu_first_retrieval",
+      "percent": 30,
+      "message": "Building repository indexes and retrieving GPU candidates",
+      "timestamp": "2026-07-13T20:53:43Z",
+      "last_updated": "2026-07-13T20:53:43Z"
+    },
+    "created_at": "2026-07-13T20:53:38.147394392Z",
+    "updated_at": "2026-07-13T20:59:07.665238517Z",
+    "submitted_at": "2026-07-13T20:53:38.147394392Z",
+    "started_at": "2026-07-13T20:53:42.469212974Z",
+    "root_job_id": "job_4ae7df154e271205",
+    "orchestration": {
+      "root_job_id": "job_4ae7df154e271205",
+      "strategy": "standalone"
+    },
+    "backend_kind": "slurm",
+    "backend_run_id": "3673251",
+    "backend_state": "RUNNING",
+    "backend_exit_code": "0:0",
+    "cache_status": "miss"
+  }
+}

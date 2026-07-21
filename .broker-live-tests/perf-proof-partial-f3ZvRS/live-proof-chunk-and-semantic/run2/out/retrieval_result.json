@@ -1,0 +1,116 @@
+{
+  "fingerprint": "sha256:eeda2403693aa347771d30a843000c296c04954dfd499be588ab91d255fb2be3",
+  "lexical_index": "/gpfs/mskmind_ess/limr/repos/local-ai-broker/.broker-live-tests/perf-proof-partial-f3ZvRS/live-proof-chunk-and-semantic/repo-inspection-cache/lexical-eeda2403693aa347771d30a843000c296c04954dfd499be588ab91d255fb2be3.sqlite3",
+  "lexical_index_cache_hit": false,
+  "fingerprint_sources": [
+    "git"
+  ],
+  "chunks_indexed": 45,
+  "lexical_candidates": 45,
+  "semantic_candidates": 45,
+  "fused_candidates": 45,
+  "reranked_candidates": 45,
+  "selected_evidence": 6,
+  "candidate_tokens": 9089,
+  "evidence_tokens": 2054,
+  "chunk_cache_total_files": 3,
+  "chunk_cache_reused_files": 3,
+  "chunk_cache_rebuilt_files": 0,
+  "semantic_index_cache_hit": false,
+  "semantic_index_document_count": 45,
+  "semantic_index_embedded_documents": 0,
+  "semantic_index_reused_documents": 45,
+  "budgets": {
+    "retrieval_token_budget": 32000,
+    "evidence_token_budget": 12000,
+    "final_pack_token_budget": 8000,
+    "synthesis_context_token_budget": 24000
+  },
+  "final_pack_tokens": 2158,
+  "selected": [
+    {
+      "id": "ev_001",
+      "path": "broker/pkg/gpuservice/control_spool.go",
+      "source_refs": [
+        {
+          "path": "broker/pkg/gpuservice/control_spool.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 98,
+          "line_end": 99,
+          "content_hash": "sha256:c296348c27447ab628bd220ef618755ddf39ad641ded094d0966883e7e905e48"
+        }
+      ]
+    },
+    {
+      "id": "ev_002",
+      "path": "workers/rag-compression/service_control.py",
+      "source_refs": [
+        {
+          "path": "workers/rag-compression/service_control.py",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 250,
+          "line_end": 307,
+          "content_hash": "sha256:d6ebde0fcac8f141fc81b4622dd016fcfa959ac8c63b3095b6c103427cd4e338"
+        }
+      ]
+    },
+    {
+      "id": "ev_003",
+      "path": "broker/cmd/common/gpu_services.go",
+      "source_refs": [
+        {
+          "path": "broker/cmd/common/gpu_services.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 1,
+          "line_end": 17,
+          "content_hash": "sha256:bad73acefc91a6cfc736ec20fc91a1c73df53a3afbdd7fd8c78797d6f1e09d3f"
+        }
+      ]
+    },
+    {
+      "id": "ev_004",
+      "path": "broker/pkg/gpuservice/control_spool.go",
+      "source_refs": [
+        {
+          "path": "broker/pkg/gpuservice/control_spool.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 83,
+          "line_end": 87,
+          "content_hash": "sha256:e593c9fcadb6a071f390ee42776042d17993a8edb2bd1278ac429e5d08fe49c4"
+        }
+      ]
+    },
+    {
+      "id": "ev_005",
+      "path": "workers/rag-compression/service_control.py",
+      "source_refs": [
+        {
+          "path": "workers/rag-compression/service_control.py",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 1,
+          "line_end": 34,
+          "content_hash": "sha256:d65d5eaacb1963e772a2b14af082f6ec31725c3884d5e96d4b13413c4b156c0d"
+        }
+      ]
+    },
+    {
+      "id": "ev_006",
+      "path": "broker/cmd/common/gpu_services.go",
+      "source_refs": [
+        {
+          "path": "broker/cmd/common/gpu_services.go",
+          "input_id": "input_0",
+          "source_namespace": "input_0",
+          "line_start": 18,
+          "line_end": 47,
+          "content_hash": "sha256:d2f57865d5ea1adbba9acaa8b6c2bee8859f3ff0f6c179e49a4d427a1fa9c316"
+        }
+      ]
+    }
+  ]
+}

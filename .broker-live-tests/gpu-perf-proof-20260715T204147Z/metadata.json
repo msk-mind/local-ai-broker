@@ -1,0 +1,25 @@
+{
+  "created_at": "2026-07-15T20:45:01.461150Z",
+  "base_url": "http://127.0.0.1:18081",
+  "runner": "tests/e2e/run_inspect_repo_gpu_perf_proof.sh",
+  "proof_script": "tests/acceptance/inspect_repo/perf_proof.py",
+  "adapter_script": "tests/acceptance/inspect_repo/broker_perf_adapter.py",
+  "expected_fingerprint_source": "input_manifest",
+  "require_zero_repository_fingerprint_ms": true,
+  "require_gpu_retrieval_and_reranking": true,
+  "proof_ok": false,
+  "proof_exit_status": 1,
+  "validation_ok": false,
+  "validation_exit_status": 1,
+  "validation_errors": [
+    "missing required broker-hint checks: ['cold_hint_skips_repository_fingerprint', 'warm_hint_skips_repository_fingerprint', 'partial_dirty_hint_skips_repository_fingerprint', 'warm_query_stage_cache_hit', 'partial_dirty_invalidates_query_cache']",
+    "cold did not report gpu retrieval/reranking: {'quality': {}, 'semantic_candidates': None, 'reranked_candidates': None, 'query_stage_cache_hit': None, 'fingerprint_sources': None, 'setup_timings_ms': None, 'stage_timings_ms': None}",
+    "warm did not report gpu retrieval/reranking: {'quality': {}, 'semantic_candidates': None, 'reranked_candidates': None, 'query_stage_cache_hit': None, 'fingerprint_sources': None, 'setup_timings_ms': None, 'stage_timings_ms': None}",
+    "partial_dirty did not report gpu retrieval/reranking: {'quality': {}, 'semantic_candidates': None, 'reranked_candidates': None, 'query_stage_cache_hit': None, 'fingerprint_sources': None, 'setup_timings_ms': None, 'stage_timings_ms': None}",
+    "cold did not produce semantic candidates: {'quality': {}, 'semantic_candidates': None, 'reranked_candidates': None, 'query_stage_cache_hit': None, 'fingerprint_sources': None, 'setup_timings_ms': None, 'stage_timings_ms': None}",
+    "cold did not produce reranked candidates: {'quality': {}, 'semantic_candidates': None, 'reranked_candidates': None, 'query_stage_cache_hit': None, 'fingerprint_sources': None, 'setup_timings_ms': None, 'stage_timings_ms': None}",
+    "partial_dirty did not produce semantic candidates: {'quality': {}, 'semantic_candidates': None, 'reranked_candidates': None, 'query_stage_cache_hit': None, 'fingerprint_sources': None, 'setup_timings_ms': None, 'stage_timings_ms': None}",
+    "partial_dirty did not produce reranked candidates: {'quality': {}, 'semantic_candidates': None, 'reranked_candidates': None, 'query_stage_cache_hit': None, 'fingerprint_sources': None, 'setup_timings_ms': None, 'stage_timings_ms': None}"
+  ],
+  "notes": []
+}

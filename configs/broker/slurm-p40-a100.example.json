@@ -12,18 +12,76 @@
     "submit_cmd": "sbatch",
     "status_cmd": "sacct",
     "cancel_cmd": "scancel",
+    "info_cmd": "sinfo",
     "script_path": "__REPO_ROOT__/deploy/slurm/broker_worker.slurm",
     "partition_cpu": "cpu",
     "partition_gpu": "hpc",
     "gpu_request_mode": "gres",
     "gpu_type_p40": "p40",
+    "gpu_type_v100": "v100",
     "gpu_type_a100": "a100",
-    "nodelist_p40": "pllimsksparky[1-4]",
-    "model_profile_p40": "gpt-oss-20b.p40",
-    "model_profile_a100": "qwen3-coder-30b.a100"
+    "nodelist_p40": "pllimsksparky[1-4]"
   },
-  "runtime": {
-    "llama_cpp_timeout_seconds": 20
+  "gpu_services": {
+    "enabled": false,
+    "registry_path": "__REPO_ROOT__/.broker/gpu-services.json",
+    "control_token": "REPLACE_WITH_RANDOM_256_BIT_TOKEN",
+    "control_request_dir": "__REPO_ROOT__/.broker/gpu-services.json.requests",
+    "script_path": "__REPO_ROOT__/deploy/slurm/gpu_service.slurm",
+    "lease_duration_seconds": 14400,
+    "health_interval_seconds": 15,
+    "heartbeat_timeout_seconds": 45,
+    "startup_timeout_seconds": 600,
+    "p40_retrieval": {
+      "profile": "REPLACE_P40_RETRIEVAL_PROFILE",
+      "model_path": "/ABSOLUTE/PATH/TO/P40_RETRIEVAL_MODEL",
+      "quantization": "REPLACE_QUANTIZATION",
+      "context_limit_tokens": 16384,
+      "runtime": "/ABSOLUTE/PATH/TO/RETRIEVAL_SERVICE",
+      "runtime_args_json": "[\"--model\",\"{model_path}\",\"--host\",\"{host}\",\"--port\",\"{port}\"]",
+      "min_replicas": 1,
+      "max_replicas": 2
+    },
+    "p40_synthesis": {
+      "profile": "REPLACE_P40_SYNTHESIS_PROFILE",
+      "model_path": "/ABSOLUTE/PATH/TO/P40_SYNTHESIS_MODEL",
+      "quantization": "REPLACE_QUANTIZATION",
+      "context_limit_tokens": 16384,
+      "runtime": "/ABSOLUTE/PATH/TO/OPENAI_COMPATIBLE_RUNTIME",
+      "runtime_args_json": "[\"--model\",\"{model_path}\",\"--host\",\"{host}\",\"--port\",\"{port}\"]",
+      "min_replicas": 1,
+      "max_replicas": 2
+    },
+    "v100_reasoning": {
+      "profile": "REPLACE_V100_REASONING_PROFILE",
+      "model_path": "/ABSOLUTE/PATH/TO/V100_REASONING_MODEL",
+      "quantization": "REPLACE_QUANTIZATION",
+      "context_limit_tokens": 32768,
+      "runtime": "/ABSOLUTE/PATH/TO/OPENAI_COMPATIBLE_RUNTIME",
+      "runtime_args_json": "[\"--model\",\"{model_path}\",\"--host\",\"{host}\",\"--port\",\"{port}\",\"--tensor-parallel-size\",\"{gpu_count}\"]",
+      "min_replicas": 0,
+      "max_replicas": 1
+    },
+    "a100_single": {
+      "profile": "REPLACE_A100_SINGLE_PROFILE",
+      "model_path": "/ABSOLUTE/PATH/TO/A100_SINGLE_MODEL",
+      "quantization": "REPLACE_QUANTIZATION",
+      "context_limit_tokens": 32768,
+      "runtime": "/ABSOLUTE/PATH/TO/OPENAI_COMPATIBLE_RUNTIME",
+      "runtime_args_json": "[\"--model\",\"{model_path}\",\"--host\",\"{host}\",\"--port\",\"{port}\"]",
+      "min_replicas": 0,
+      "max_replicas": 1
+    },
+    "a100_multigpu": {
+      "profile": "REPLACE_A100_MULTIGPU_PROFILE",
+      "model_path": "/ABSOLUTE/PATH/TO/A100_MULTIGPU_MODEL",
+      "quantization": "REPLACE_QUANTIZATION",
+      "context_limit_tokens": 65536,
+      "runtime": "/ABSOLUTE/PATH/TO/OPENAI_COMPATIBLE_RUNTIME",
+      "runtime_args_json": "[\"--model\",\"{model_path}\",\"--host\",\"{host}\",\"--port\",\"{port}\",\"--tensor-parallel-size\",\"{gpu_count}\"]",
+      "min_replicas": 0,
+      "max_replicas": 1
+    }
   },
   "parallel": {
     "max_batch_size": 32,

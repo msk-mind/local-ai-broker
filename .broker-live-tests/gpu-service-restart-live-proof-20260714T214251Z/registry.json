@@ -1,0 +1,40 @@
+{
+  "schema": "gpu_service_registry_v1",
+  "updated_at": "2026-07-14T21:43:04.579170Z",
+  "records": [
+    {
+      "id": "gpu-p40-retrieval-live-proof",
+      "tier": "p40-retrieval",
+      "role": "retrieval",
+      "state": "ready",
+      "model_profile": "retrieval-profile",
+      "model": "fake-retrieval-model",
+      "capabilities": [
+        "embeddings",
+        "index_status",
+        "index_upsert",
+        "faiss_search",
+        "rerank"
+      ],
+      "context_limit_tokens": 32768,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "created_at": "2026-07-14T21:42:59Z",
+      "startup_deadline": "2026-07-14T21:57:59Z",
+      "lease_expires_at": "2026-07-15T01:43:04.579140Z",
+      "registration_token_sha256": "0409ffa54f4533e411fb5f7e2e902acd0e347b4a7492c3c4dbae55fe641684fb",
+      "endpoint": "http://pllimsksparky3.mskcc.org:45797",
+      "endpoint_auth": {
+        "type": "bearer",
+        "bearer_token": "NNYHwu3N57yQcq7R2B1kaTazVmZzyyA79Om8JG3IaI2lQkIQXQmlwQCjkWBk72LS"
+      },
+      "slurm_job_id": "3682035",
+      "heartbeat_at": "2026-07-14T21:43:04.579140Z",
+      "health_error": "",
+      "failure_category": ""
+    }
+  ],
+  "demands": []
+}

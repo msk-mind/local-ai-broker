@@ -1,0 +1,35 @@
+{
+  "first": {
+    "lexical_candidates": 2,
+    "chunk_cache_total_files": 2,
+    "chunk_cache_reused_files": 0,
+    "chunk_cache_rebuilt_files": 2,
+    "lexical_index_cache_hit": false,
+    "lexical_index_working_cache_hit": false,
+    "lexical_index_updated_files": 2,
+    "lexical_index_removed_files": 0,
+    "lexical_index_inserted_chunks": 2
+  },
+  "second": {
+    "lexical_candidates": 2,
+    "chunk_cache_total_files": 2,
+    "chunk_cache_reused_files": 1,
+    "chunk_cache_rebuilt_files": 1,
+    "lexical_index_cache_hit": false,
+    "lexical_index_working_cache_hit": false,
+    "lexical_index_updated_files": 1,
+    "lexical_index_removed_files": 0,
+    "lexical_index_inserted_chunks": 1
+  },
+  "third": {
+    "lexical_candidates": 2,
+    "chunk_cache_total_files": 2,
+    "chunk_cache_reused_files": 2,
+    "chunk_cache_rebuilt_files": 0,
+    "lexical_index_cache_hit": true,
+    "lexical_index_working_cache_hit": true,
+    "lexical_index_updated_files": 0,
+    "lexical_index_removed_files": 0,
+    "lexical_index_inserted_chunks": 0
+  }
+}

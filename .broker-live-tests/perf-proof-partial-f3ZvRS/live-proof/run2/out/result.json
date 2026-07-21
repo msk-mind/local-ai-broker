@@ -1,0 +1,187 @@
+{
+  "schema_name": "repo_inspection_v2",
+  "schema_version": "2.0.0",
+  "payload": {
+    "mode": "evidence",
+    "query": "Where is the GPU service control plane started for the broker transports?",
+    "findings": [],
+    "evidence": [
+      {
+        "id": "ev_001",
+        "path": "broker/pkg/gpuservice/control_spool.go",
+        "language": "go",
+        "symbol": "Dir",
+        "source_refs": [
+          {
+            "path": "broker/pkg/gpuservice/control_spool.go",
+            "input_id": "input_0",
+            "source_namespace": "input_0",
+            "line_start": 98,
+            "line_end": 99,
+            "content_hash": "sha256:c296348c27447ab628bd220ef618755ddf39ad641ded094d0966883e7e905e48"
+          }
+        ],
+        "excerpt": "\nfunc (s *ControlSpool) Dir() string { return s.dir }",
+        "rank": 1
+      },
+      {
+        "id": "ev_002",
+        "path": "workers/rag-compression/service_control.py",
+        "language": "python",
+        "symbol": "request_service",
+        "source_refs": [
+          {
+            "path": "workers/rag-compression/service_control.py",
+            "input_id": "input_0",
+            "source_namespace": "input_0",
+            "line_start": 250,
+            "line_end": 307,
+            "content_hash": "sha256:d6ebde0fcac8f141fc81b4622dd016fcfa959ac8c63b3095b6c103427cd4e338"
+          }
+        ],
+        "excerpt": "def request_service(execution_plan, tier, failure_category, reason):\n    execution_plan = execution_plan or {}\n    request_dir = execution_plan.get(\"gpu_service_request_path\")\n    token = execution_plan.get(\"gpu_service_control_token\")\n    if not request_dir or not token:\n        raise GPUServiceError(\"availability\", \"GPU service demand control is not configured\")\n    timeout_seconds = float(execution_plan.get(\"gpu_service_startup_timeout_seconds\") or 300)\n    health_interval = float(execution_plan.get(\"gpu_service_health_interval_seconds\") or 30)\n    now = datetime.now(timezone.utc)\n    request_id = \"req_\" + secrets.token_hex(16)\n    payload = {\n        \"schema\": REQUEST_SCHEMA,\n        \"request_id\": request_id,\n        \"tier\": str(tier),\n        \"failure_category\": str(failure_category or \"availability\"),\n        \"reason\": str(reason or \"GPU service required\"),\n        \"requested_at\": _timestamp(now),\n        \"deadline\": _timestamp(now + timedelta(seconds=timeout_seconds)),\n        \"nonce\": secrets.token_urlsafe(24),\n    }\n    payload[\"signature\"] = request_signature(token, payload)\n    request_path = Path(request_dir) / f\"{request_id}.request.json\"\n    response_path = Path(request_dir) / f\"{request_id}.response.json\"\n    _atomic_write_json(request_path, payload)\n\n    try:\n        monotonic_deadline = time.monotonic() + timeout_seconds\n        poll_seconds = min(max(0.05, health_interval / 4), 2.0)\n        while time.monotonic() < monotonic_deadline:\n            if response_path.exists():\n                try:\n                    response = json.loads(response_path.read_text(encoding=\"utf-8\"))\n                except (OSError, json.JSONDecodeError) as exc:\n                    raise GPUServiceError(\"service_failure\", \"GPU demand response could not be read\") from exc\n                response = verify_response(token, response, request_id)\n                state = str(response.get(\"state\") or \"\")\n                if state == \"ready\":\n                    return validate_ready_service(response.get(\"service\"), tier, health_interval)\n                if state == \"failed\":\n                    error = str(response.get(\"error\") or \"GPU service demand failed\")\n                    category = str(response.get(\"failure_category\") or \"service_failure\")\n                    diagnostics = response.get(\"service_diagnostics\")\n                    if isinstance(diagnostics, dict) and str(diagnostics.get(\"tier\") or \"\") != str(tier):\n                        raise GPUServiceError(\n                            \"service_failure\",\n                            \"GPU demand failure diagnostics returned the wrong tier\",\n                        )\n                    raise GPUServiceError(category, error, service_diagnostics=diagnostics)\n                if state not in {\"pending\", \"launching\"}:\n                    raise GPUServiceError(\"service_failure\", \"GPU demand response has an invalid state\")\n            time.sleep(min(poll_seconds, max(0.0, monotonic_deadline - time.monotonic())))\n        raise GPUServiceError(\"queue_delay\", f\"GPU service demand for {tier} exceeded its startup deadline\")\n    finally:\n        # Requests and responses are single-consumer capability files. Remove\n        # both on success, terminal failure, authentication failure, or timeout.\n        request_path.unlink(missing_ok=True)\n        response_path.unlink(missing_ok=True)\n\n",
+        "rank": 3
+      },
+      {
+        "id": "ev_003",
+        "path": "broker/cmd/common/gpu_services.go",
+        "language": "go",
+        "symbol": "",
+        "source_refs": [
+          {
+            "path": "broker/cmd/common/gpu_services.go",
+            "input_id": "input_0",
+            "source_namespace": "input_0",
+            "line_start": 1,
+            "line_end": 17,
+            "content_hash": "sha256:bad73acefc91a6cfc736ec20fc91a1c73df53a3afbdd7fd8c78797d6f1e09d3f"
+          }
+        ],
+        "excerpt": "package common\n\nimport (\n\t\"context\"\n\t\"errors\"\n\t\"fmt\"\n\t\"log\"\n\t\"time\"\n\n\t\"github.com/msk-mind/local-ai-broker/broker/pkg/backends\"\n\t\"github.com/msk-mind/local-ai-broker/broker/pkg/config\"\n\t\"github.com/msk-mind/local-ai-broker/broker/pkg/gpuservice\"\n)\n\n// StartGPUServiceControlPlane starts the scheduler owner independently from\n// request workers. A transient scheduler or health failure is retried while\n// the broker remains available for lexical evidence fallback.",
+        "rank": 5
+      },
+      {
+        "id": "ev_004",
+        "path": "broker/pkg/gpuservice/control_spool.go",
+        "language": "go",
+        "symbol": "ControlSpool",
+        "source_refs": [
+          {
+            "path": "broker/pkg/gpuservice/control_spool.go",
+            "input_id": "input_0",
+            "source_namespace": "input_0",
+            "line_start": 83,
+            "line_end": 87,
+            "content_hash": "sha256:e593c9fcadb6a071f390ee42776042d17993a8edb2bd1278ac429e5d08fe49c4"
+          }
+        ],
+        "excerpt": "type ControlSpool struct {\n\tdir   string\n\ttoken []byte\n\tnow   func() time.Time\n}",
+        "rank": 2
+      },
+      {
+        "id": "ev_005",
+        "path": "workers/rag-compression/service_control.py",
+        "language": "python",
+        "symbol": "",
+        "source_refs": [
+          {
+            "path": "workers/rag-compression/service_control.py",
+            "input_id": "input_0",
+            "source_namespace": "input_0",
+            "line_start": 1,
+            "line_end": 34,
+            "content_hash": "sha256:d65d5eaacb1963e772a2b14af082f6ec31725c3884d5e96d4b13413c4b156c0d"
+          }
+        ],
+        "excerpt": "\"\"\"Authenticated demand spool client for scheduler-owned GPU services.\n\nThe inspection worker only writes a signed demand file and polls its signed\nresponse.  It never invokes Slurm or mutates the shared service registry.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport base64\nimport hashlib\nimport hmac\nimport json\nimport os\nimport secrets\nimport time\nfrom datetime import datetime, timedelta, timezone\nfrom pathlib import Path\n\nfrom gpu_client import GPUServiceError\n\n\nREQUEST_SCHEMA = \"gpu_service_demand_v1\"\nRESPONSE_SCHEMA = \"gpu_service_demand_response_v1\"\nFAILURE_REPORT_SCHEMA = \"gpu_service_failure_report_v1\"\nREPORTABLE_SERVICE_FAILURES = {\n    \"availability\",\n    \"timeout\",\n    \"service_failure\",\n    \"authentication\",\n    \"oom\",\n    \"heartbeat_lost\",\n    \"endpoint_unhealthy\",\n}\n\n",
+        "rank": 4
+      },
+      {
+        "id": "ev_006",
+        "path": "broker/cmd/common/gpu_services.go",
+        "language": "go",
+        "symbol": "StartGPUServiceControlPlane",
+        "source_refs": [
+          {
+            "path": "broker/cmd/common/gpu_services.go",
+            "input_id": "input_0",
+            "source_namespace": "input_0",
+            "line_start": 18,
+            "line_end": 47,
+            "content_hash": "sha256:d2f57865d5ea1adbba9acaa8b6c2bee8859f3ff0f6c179e49a4d427a1fa9c316"
+          }
+        ],
+        "excerpt": "func StartGPUServiceControlPlane(\n\tctx context.Context,\n\tcfg config.Config,\n\tbackend backends.Backend,\n\tlogger *log.Logger,\n) (*gpuservice.Manager, error) {\n\tif !cfg.GPUServiceEnabled {\n\t\treturn nil, nil\n\t}\n\tscheduler, ok := backend.(gpuservice.Scheduler)\n\tif !ok {\n\t\treturn nil, fmt.Errorf(\"GPU service control plane requires a scheduler-backed backend\")\n\t}\n\tmanager, err := gpuservice.NewManagerFromConfig(cfg, scheduler)\n\tif err != nil {\n\t\tif errors.Is(err, gpuservice.ErrControlPlaneDisabled) {\n\t\t\treturn nil, nil\n\t\t}\n\t\treturn nil, err\n\t}\n\tif logger == nil {\n\t\tlogger = log.Default()\n\t}\n\tretryInterval := time.Duration(cfg.GPUServiceHealthIntervalSeconds) * time.Second\n\tif retryInterval <= 0 {\n\t\tretryInterval = 15 * time.Second\n\t}\n\tgo runGPUServiceControlPlane(ctx, manager, logger, retryInterval)\n\treturn manager, nil\n}",
+        "rank": 38
+      }
+    ],
+    "quality": {
+      "result": "evidence_only",
+      "retrieval": "gpu",
+      "reranking": "gpu",
+      "synthesis": "not_requested",
+      "answer_ready": false
+    },
+    "warnings": [],
+    "provenance": {
+      "repository_fingerprint": "sha256:d8c2363359c385e2d513d5e0636ac809fe0cd751716bffd219c19539f32d761d",
+      "index_fingerprint": "sha256:3413d6875625a7cb48c85631554b2e02d4a1fba04ecf93a87cae8f0e7e2374c5",
+      "retrieval_model_profile": "p40-retrieval-glm47",
+      "rerank_model_profile": "p40-retrieval-glm47"
+    },
+    "retrieval": {
+      "fingerprint": "sha256:3413d6875625a7cb48c85631554b2e02d4a1fba04ecf93a87cae8f0e7e2374c5",
+      "fingerprint_sources": [
+        "git"
+      ],
+      "chunks_indexed": 45,
+      "lexical_candidates": 45,
+      "semantic_candidates": 45,
+      "fused_candidates": 45,
+      "reranked_candidates": 45,
+      "selected_evidence": 6,
+      "candidate_tokens": 9095,
+      "evidence_tokens": 2054,
+      "lexical_index_cache_hit": false,
+      "semantic_index_cache_hit": false,
+      "semantic_index_document_count": 45,
+      "semantic_index_embedded_documents": 1,
+      "semantic_index_reused_documents": 44,
+      "budgets": {
+        "retrieval_token_budget": 32000,
+        "evidence_token_budget": 12000,
+        "final_pack_token_budget": 8000,
+        "synthesis_context_token_budget": 24000
+      },
+      "final_pack_tokens": 2158
+    },
+    "runtime": {
+      "attempts": [
+        {
+          "operation": "semantic_retrieval",
+          "tier": "p40-retrieval",
+          "slurm_job_id": "3674417",
+          "gpu_count": 1,
+          "gpu_type": "p40",
+          "model_profile": "p40-retrieval-glm47",
+          "attempt": 1,
+          "status": "succeeded",
+          "failure_category": "",
+          "escalation_reason": "primary_retrieval"
+        },
+        {
+          "operation": "rerank",
+          "tier": "p40-retrieval",
+          "slurm_job_id": "3674417",
+          "gpu_count": 1,
+          "gpu_type": "p40",
+          "model_profile": "p40-retrieval-glm47",
+          "attempt": 1,
+          "status": "succeeded",
+          "failure_category": "",
+          "escalation_reason": "semantic_candidates_ready"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,1 @@
+{"schema":"repo-inspection-git-file-signatures-v1","head":"c9d40e90417b4cf1252747bf90a96096dc784045","status":"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945","signatures":{"mcp.go":"git:c866123679b7a27474b7553e8e7643d2fbfdd7ba","service.py":"git:7e3550b6d774bac38edb86fc624315b189e58ed0"}}

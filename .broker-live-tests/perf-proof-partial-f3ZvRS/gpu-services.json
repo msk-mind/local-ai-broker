@@ -1,0 +1,70 @@
+{
+  "schema": "gpu_service_registry_v1",
+  "updated_at": "2026-07-15T16:51:53.034542Z",
+  "records": [
+    {
+      "id": "gpu-p40-retrieval-b7ddfb522cdce999",
+      "tier": "p40-retrieval",
+      "role": "retrieval",
+      "state": "ready",
+      "endpoint": "http://pllimsksparky1.mskcc.org:39895",
+      "endpoint_auth": {
+        "type": "bearer",
+        "bearer_token": "fYdS8e89JCEeK5CYYWtx-8u4BHfoF0e7IyHV8KyH9nEyCORLEnPKeTwynYi5uCrh"
+      },
+      "model_profile": "p40-retrieval-glm47",
+      "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+      "capabilities": [
+        "embeddings",
+        "index_status",
+        "index_upsert",
+        "faiss_search",
+        "rerank"
+      ],
+      "context_limit_tokens": 8192,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "slurm_job_id": "3680332",
+      "scheduler_state": "RUNNING",
+      "created_at": "2026-07-14T16:22:50.05385588Z",
+      "startup_deadline": "2026-07-14T16:32:01.776351967Z",
+      "heartbeat_at": "2026-07-15T16:22:56.333768Z",
+      "lease_expires_at": "2026-07-15T20:22:56.333768Z",
+      "absolute_lease_expires_at": "0001-01-01T00:00:00Z",
+      "last_health_check_at": "2026-07-15T15:26:01.833305165Z",
+      "registration_token_sha256": "c96888ce43d8c23e1720b72309130c3c33b2c3846ef5074b1b0d5c60319dd5d7"
+    },
+    {
+      "id": "gpu-p40-synthesis-9de3702c5e4e7bf8",
+      "tier": "p40-synthesis",
+      "role": "synthesis",
+      "state": "ready",
+      "endpoint": "http://pllimsksparky2.mskcc.org:41023",
+      "endpoint_auth": {
+        "type": "bearer",
+        "bearer_token": "bD-IHZx8yDpRlFhepz2GyfIm9vt-OT_LFJVeSRe6PVrSZPEPwi-4bGqhcLxxcp68"
+      },
+      "model_profile": "p40-synthesis-glm47",
+      "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+      "capabilities": [
+        "chat_completions"
+      ],
+      "context_limit_tokens": 8192,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "slurm_job_id": "3680421",
+      "scheduler_state": "RUNNING",
+      "created_at": "2026-07-14T16:51:31.779186241Z",
+      "startup_deadline": "2026-07-14T17:01:27.50730283Z",
+      "heartbeat_at": "2026-07-15T16:51:53.034501Z",
+      "lease_expires_at": "2026-07-15T20:51:53.034501Z",
+      "absolute_lease_expires_at": "0001-01-01T00:00:00Z",
+      "last_health_check_at": "2026-07-15T15:26:01.833305165Z",
+      "registration_token_sha256": "414a01d00d32675a552a695d3cf7616c8eda52b5435edb204417b3e460f1dadf"
+    }
+  ]
+}

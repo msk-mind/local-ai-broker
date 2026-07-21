@@ -1,0 +1,5 @@
+broker-server 2026/07/14 08:40:05 audit verification ok path=.broker-live-tests/perf-proof3.vRocRx/audit.jsonl events=0 last_hash=
+broker-server 2026/07/14 08:40:05 listening on 127.0.0.1:38713
+broker-server 2026/07/14 08:40:05 submitted job=job_faaf621187d65110 task_type=inspect_repo backend_run_id=job_faaf621187d65110 cache_key_ms=409 stage_bundle_ms=5 backend_submit_ms=46 total_submit_ms=466
+broker-server 2026/07/14 08:40:14 submitted job=job_8979427a1cdc8f32 task_type=inspect_repo backend_run_id=job_8979427a1cdc8f32 cache_key_ms=606 stage_bundle_ms=6 backend_submit_ms=19 total_submit_ms=644
+broker-server 2026/07/14 08:40:14 received signal terminated, shutting down

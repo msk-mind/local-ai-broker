@@ -1,0 +1,91 @@
+{
+  "schema": "gpu_service_registry_v1",
+  "updated_at": "2026-07-13T18:08:53.160905Z",
+  "records": [
+    {
+      "id": "gpu-p40-synthesis-a5b4d43fe4efd646",
+      "tier": "p40-synthesis",
+      "role": "synthesis",
+      "state": "ready",
+      "endpoint": "http://pllimsksparky3.mskcc.org:46877",
+      "endpoint_auth": {
+        "type": "bearer",
+        "bearer_token": "36hQXo3hu0W2qoni2xkbN1HkuF6WKnLwSYMmFPVOIl2vFqGeTu8pLU_OX8515QdZ"
+      },
+      "model_profile": "p40-synthesis-glm47",
+      "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+      "capabilities": [
+        "chat_completions"
+      ],
+      "context_limit_tokens": 8192,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "slurm_job_id": "3672146",
+      "scheduler_state": "RUNNING",
+      "created_at": "2026-07-13T18:04:42.648189219Z",
+      "startup_deadline": "2026-07-13T18:08:41.976330993Z",
+      "heartbeat_at": "2026-07-13T18:08:53.160869Z",
+      "lease_expires_at": "2026-07-13T22:08:53.160869Z",
+      "absolute_lease_expires_at": "0001-01-01T00:00:00Z",
+      "last_health_check_at": "2026-07-13T18:08:43.349276097Z",
+      "registration_token_sha256": "ebd409144147d4b9ee76b8814a8b87a5705063f4d230d82110c08494f79a4593"
+    },
+    {
+      "id": "gpu-p40-retrieval-7989c42e0dae95bf",
+      "tier": "p40-retrieval",
+      "role": "retrieval",
+      "state": "starting",
+      "endpoint_auth": {
+        "type": "",
+        "bearer_token": ""
+      },
+      "model_profile": "p40-retrieval-glm47",
+      "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+      "capabilities": [
+        "embeddings",
+        "index_status",
+        "index_upsert",
+        "faiss_search",
+        "rerank"
+      ],
+      "context_limit_tokens": 8192,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "slurm_job_id": "3672158",
+      "scheduler_state": "queued",
+      "created_at": "2026-07-13T18:08:43.548066957Z",
+      "startup_deadline": "2026-07-13T18:12:43.349276097Z",
+      "heartbeat_at": "0001-01-01T00:00:00Z",
+      "lease_expires_at": "2026-07-13T22:08:43.548066957Z",
+      "absolute_lease_expires_at": "0001-01-01T00:00:00Z",
+      "last_health_check_at": "0001-01-01T00:00:00Z",
+      "registration_token_sha256": "86b88accc06fc79aa29ffc9229971f9f2841719304429943e43007b02cc64da4"
+    }
+  ],
+  "demands": [
+    {
+      "id": "gpu-demand-fccbe8a42c47a017",
+      "tier": "p40-retrieval",
+      "state": "failed",
+      "failure_category": "service_failure",
+      "reason": "GPU FAISS retrieval is required for inspect_repo",
+      "requested_at": "2026-07-13T18:08:13.228649202Z",
+      "deadline": "2026-07-13T18:12:12.003402096Z",
+      "service_id": "gpu-p40-retrieval-d6e1f528cab28343",
+      "service_diagnostics": {
+        "tier": "p40-retrieval",
+        "slurm_job_id": "3672154",
+        "gpu": {
+          "type": "p40",
+          "count": 1
+        },
+        "model_profile": "p40-retrieval-glm47"
+      },
+      "error": "semantic_retrieval request failed validation or execution"
+    }
+  ]
+}

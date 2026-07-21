@@ -1,0 +1,7 @@
+Broker worker started
+Broker job ID: job_30305b02d35b0579
+Task type: inspect_repo
+Output dir: .broker-live-tests/perf-proof-final-70xmEB/runs/job_30305b02d35b0579
+Repo root: /gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker
+Node: pllimsksparky1
+Execution plan: .broker-live-tests/perf-proof-final-70xmEB/runs/job_30305b02d35b0579/execution_plan.json

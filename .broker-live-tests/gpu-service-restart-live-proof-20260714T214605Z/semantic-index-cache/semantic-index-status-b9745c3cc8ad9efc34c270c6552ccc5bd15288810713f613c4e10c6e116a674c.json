@@ -1,0 +1,1 @@
+{"schema":"gpu_semantic_index_status_v3","key":{"model_profile":"retrieval","index_fingerprint":"fp1"},"record":{"ready":true,"document_count":1,"model":"retrieval-model","identifiers":["chunk_a"],"documents_meta":[{"id":"chunk_a","content_fingerprint":"sha256:1a989ea86150171c687b0727f218eedbb94c4665a7da9b0add1bf5de607f2bf1"}]}}

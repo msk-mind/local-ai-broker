@@ -1,5 +1,5 @@
 {
-  "listen_addr": "127.0.0.1:46149",
+  "listen_addr": "127.0.0.1:37543",
   "job_store_path": "__REPO_ROOT__/.broker/jobs.json",
   "run_root_path": "__REPO_ROOT__/.broker/runs",
   "repo_root_path": "__REPO_ROOT__",
@@ -16,9 +16,10 @@
     "partition_gpu": "hpc",
     "gpu_request_mode": "gres",
     "gpu_type_p40": "p40",
+    "gpu_type_v100": "v100",
     "gpu_type_a100": "a100",
-    "model_profile_p40": "gpt-oss-20b.p40",
-    "model_profile_a100": "qwen3-coder-30b.a100"
+    "model_profile_p40": "",
+    "model_profile_a100": ""
   },
   "runtime": {
     "llama_cpp_timeout_seconds": 20

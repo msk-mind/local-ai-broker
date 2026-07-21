@@ -1,0 +1,41 @@
+{
+  "service_id": "gpu-v100-reasoning-37bd3e606beff230",
+  "tier": "v100-reasoning",
+  "role": "synthesis",
+  "registry_path": "/gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker/.broker-live-tests/perf-proof-final-70xmEB/gpu-services.json",
+  "registration_token": "adaff3f74e287816b9892190248385b2a43ab74b2e4a5e9996e1a5c83bdcc469",
+  "heartbeat_interval_seconds": 15,
+  "lease_duration_seconds": 14400,
+  "capabilities": [
+    "chat_completions"
+  ],
+  "deployment": {
+    "name": "v100-reasoning-gptoss20b",
+    "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/gpt-oss-20b-mxfp4.gguf",
+    "quantization": "MXFP4",
+    "context_limit_tokens": 32768,
+    "runtime": "/gpfs/mskmind_ess/limr/repos/llama.cpp/build-clean/bin/llama-server",
+    "runtime_args": [
+      "--model",
+      "{model_path}",
+      "--host",
+      "{host}",
+      "--port",
+      "{port}",
+      "--ctx-size",
+      "{context_limit_tokens}",
+      "--n-gpu-layers",
+      "999",
+      "--tensor-parallel-size",
+      "{gpu_count}"
+    ]
+  },
+  "placement": {
+    "partition": "hpc",
+    "gpu": {
+      "type": "v100",
+      "count": 4
+    },
+    "nodelist": "pllimskhpc[1-3]"
+  }
+}

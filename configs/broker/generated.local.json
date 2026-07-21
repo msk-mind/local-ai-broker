@@ -1,0 +1,119 @@
+{
+  "listen_addr": "127.0.0.1:46039",
+  "job_store_path": "__REPO_ROOT__/.broker/jobs.json",
+  "run_root_path": "__REPO_ROOT__/.broker/runs",
+  "repo_root_path": "__REPO_ROOT__",
+  "audit_log_path": "__REPO_ROOT__/.broker/audit.jsonl",
+  "audit_verify_mode": "warn",
+  "auth_mode": "header",
+  "mcp_actor": "",
+  "mcp_role": "",
+  "backend": "local",
+  "local": {
+    "mode": "command",
+    "script_path": "__REPO_ROOT__/deploy/local/broker_worker.sh"
+  },
+  "slurm": {
+    "mode": "",
+    "submit_cmd": "",
+    "status_cmd": "",
+    "cancel_cmd": "",
+    "info_cmd": "",
+    "script_path": "",
+    "partition_cpu": "",
+    "partition_gpu": "",
+    "partition_p40": "",
+    "partition_v100": "",
+    "partition_a100": "",
+    "gpu_request_mode": "",
+    "gpu_type_p40": "",
+    "gpu_type_v100": "",
+    "gpu_type_a100": "",
+    "nodelist_cpu": "",
+    "nodelist_p40": "",
+    "nodelist_v100": "",
+    "nodelist_a100": "",
+    "constraint_cpu": "",
+    "constraint_p40": "",
+    "constraint_v100": "",
+    "constraint_a100": "",
+    "model_profile_cpu": "",
+    "model_profile_p40": "",
+    "model_profile_a100": ""
+  },
+  "runtime": {
+    "llama_cpp_base_url": "",
+    "llama_cpp_timeout_seconds": 0,
+    "vllm_base_url": "",
+    "vllm_timeout_seconds": 0,
+    "sglang_base_url": "",
+    "sglang_timeout_seconds": 0
+  },
+  "gpu_services": {
+    "enabled": false,
+    "registry_path": "",
+    "control_token": "",
+    "control_request_dir": "",
+    "script_path": "",
+    "lease_duration_seconds": 0,
+    "health_interval_seconds": 0,
+    "heartbeat_timeout_seconds": 0,
+    "startup_timeout_seconds": 0,
+    "p40_retrieval": {
+      "profile": "",
+      "model_path": "",
+      "quantization": "",
+      "context_limit_tokens": 0,
+      "runtime": "",
+      "runtime_args_json": "",
+      "min_replicas": 0,
+      "max_replicas": 0
+    },
+    "p40_synthesis": {
+      "profile": "",
+      "model_path": "",
+      "quantization": "",
+      "context_limit_tokens": 0,
+      "runtime": "",
+      "runtime_args_json": "",
+      "min_replicas": 0,
+      "max_replicas": 0
+    },
+    "v100_reasoning": {
+      "profile": "",
+      "model_path": "",
+      "quantization": "",
+      "context_limit_tokens": 0,
+      "runtime": "",
+      "runtime_args_json": "",
+      "min_replicas": 0,
+      "max_replicas": 0
+    },
+    "a100_single": {
+      "profile": "",
+      "model_path": "",
+      "quantization": "",
+      "context_limit_tokens": 0,
+      "runtime": "",
+      "runtime_args_json": "",
+      "min_replicas": 0,
+      "max_replicas": 0
+    },
+    "a100_multigpu": {
+      "profile": "",
+      "model_path": "",
+      "quantization": "",
+      "context_limit_tokens": 0,
+      "runtime": "",
+      "runtime_args_json": "",
+      "min_replicas": 0,
+      "max_replicas": 0
+    }
+  },
+  "parallel": {
+    "max_batch_size": 0,
+    "max_active_batches": 0,
+    "max_additional_batches": 0,
+    "max_retried_shards": 0
+  }
+}

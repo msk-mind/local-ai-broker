@@ -1,0 +1,39 @@
+{
+  "service_id": "gpu-a100-single-654927321bb2c70e",
+  "tier": "a100-single",
+  "role": "synthesis",
+  "registry_path": "/gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker/.broker-live-tests/answer-e2e-z2Ghto/gpu-services.json",
+  "registration_token": "ae423842d18f81ebb75a4fd06176a9bfb3c2c40cd29a363be0fa76ebff8ce88a",
+  "heartbeat_interval_seconds": 15,
+  "lease_duration_seconds": 14400,
+  "capabilities": [
+    "chat_completions"
+  ],
+  "deployment": {
+    "name": "a100-single-qwen30b",
+    "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/qwen3-coder-30b-a3b-instruct-q8_0.gguf",
+    "quantization": "Q8_0",
+    "context_limit_tokens": 32768,
+    "runtime": "/gpfs/mskmind_ess/limr/repos/llama.cpp/build-clean/bin/llama-server",
+    "runtime_args": [
+      "--model",
+      "{model_path}",
+      "--host",
+      "{host}",
+      "--port",
+      "{port}",
+      "--ctx-size",
+      "{context_limit_tokens}",
+      "--n-gpu-layers",
+      "999"
+    ]
+  },
+  "placement": {
+    "partition": "hpc",
+    "gpu": {
+      "type": "a100",
+      "count": 1
+    },
+    "nodelist": "tllihpcgpu[1-4]"
+  }
+}

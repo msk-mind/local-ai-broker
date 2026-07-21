@@ -1,0 +1,4 @@
+broker-server 2026/07/14 08:37:58 audit verification ok path=.broker-live-tests/perf-proof.Ifjt3g/audit.jsonl events=0 last_hash=
+broker-server 2026/07/14 08:37:58 listening on 127.0.0.1:38517
+broker-server 2026/07/14 08:38:00 submitted job=job_1318774e19b1b393 task_type=inspect_repo backend_run_id=job_1318774e19b1b393 cache_key_ms=1563 stage_bundle_ms=10 backend_submit_ms=23 total_submit_ms=1621
+broker-server 2026/07/14 08:38:25 received signal terminated, shutting down

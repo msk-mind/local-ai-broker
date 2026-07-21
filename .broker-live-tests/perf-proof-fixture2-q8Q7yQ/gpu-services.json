@@ -1,0 +1,68 @@
+{
+  "schema": "gpu_service_registry_v1",
+  "updated_at": "2026-07-13T22:16:53.08438651Z",
+  "records": [
+    {
+      "id": "gpu-p40-retrieval-3d992e4337cbbb50",
+      "tier": "p40-retrieval",
+      "role": "retrieval",
+      "state": "starting",
+      "endpoint_auth": {
+        "type": "",
+        "bearer_token": ""
+      },
+      "model_profile": "p40-retrieval-glm47",
+      "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+      "capabilities": [
+        "embeddings",
+        "index_status",
+        "index_upsert",
+        "faiss_search",
+        "rerank"
+      ],
+      "context_limit_tokens": 8192,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "slurm_job_id": "3674422",
+      "scheduler_state": "PENDING",
+      "created_at": "2026-07-13T22:16:23.089258328Z",
+      "startup_deadline": "2026-07-13T22:26:23.001458693Z",
+      "heartbeat_at": "0001-01-01T00:00:00Z",
+      "lease_expires_at": "2026-07-14T02:16:23.089258328Z",
+      "absolute_lease_expires_at": "0001-01-01T00:00:00Z",
+      "last_health_check_at": "0001-01-01T00:00:00Z",
+      "registration_token_sha256": "e8bb4ecc39eb0c6e3b4a4dde5446e9b1204335fd1b6b92495b0ce354c88c472a"
+    },
+    {
+      "id": "gpu-p40-synthesis-83830d0122651096",
+      "tier": "p40-synthesis",
+      "role": "synthesis",
+      "state": "starting",
+      "endpoint_auth": {
+        "type": "",
+        "bearer_token": ""
+      },
+      "model_profile": "p40-synthesis-glm47",
+      "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+      "capabilities": [
+        "chat_completions"
+      ],
+      "context_limit_tokens": 8192,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "slurm_job_id": "3674423",
+      "scheduler_state": "PENDING",
+      "created_at": "2026-07-13T22:16:23.136355593Z",
+      "startup_deadline": "2026-07-13T22:26:23.001458693Z",
+      "heartbeat_at": "0001-01-01T00:00:00Z",
+      "lease_expires_at": "2026-07-14T02:16:23.136355593Z",
+      "absolute_lease_expires_at": "0001-01-01T00:00:00Z",
+      "last_health_check_at": "0001-01-01T00:00:00Z",
+      "registration_token_sha256": "35f1b1814219781a1ae60bb17d724b192a1f2d4caf2030a69279b0a161531789"
+    }
+  ]
+}

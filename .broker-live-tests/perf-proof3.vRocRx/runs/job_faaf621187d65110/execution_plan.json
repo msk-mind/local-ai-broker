@@ -1,0 +1,1 @@
+{"execution_profile":{"tier":"cpu-rag-indexing","runtime":"deterministic"},"job_id":"job_faaf621187d65110","repo_inspection_cache_path":".broker-live-tests/perf-proof3.vRocRx/runs/repo-inspection-cache","resource_tier":"cpu-rag-indexing","runtime_backend":"deterministic","runtime_connection":{"base_url":"","timeout_seconds":0},"selected_model":"","task_type":"inspect_repo"}

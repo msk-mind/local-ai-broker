@@ -1,0 +1,190 @@
+{
+  "schema_name": "repo_inspection_v2",
+  "schema_version": "2.0.0",
+  "payload": {
+    "mode": "evidence",
+    "query": "audit this repo",
+    "findings": [],
+    "evidence": [
+      {
+        "id": "ev_001",
+        "path": "workers/rag-compression/service_control.py",
+        "language": "python",
+        "symbol": "_atomic_write_json",
+        "source_refs": [
+          {
+            "path": "workers/rag-compression/service_control.py",
+            "input_id": "input_0",
+            "source_namespace": "input_0",
+            "line_start": 145,
+            "line_end": 171,
+            "content_hash": "sha256:d77e1b3c5949ceaf78989eefc267409f7a013d568c8b746e849bed6a12048c22"
+          }
+        ],
+        "excerpt": "def _atomic_write_json(path, payload):\n    path = Path(path)\n    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)\n    try:\n        os.chmod(path.parent, 0o700)\n    except OSError:\n        pass\n    tmp = path.parent / f\".{path.name}.tmp-{os.getpid()}-{secrets.token_hex(6)}\"\n    descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n    try:\n        data = json.dumps(payload, separators=(\",\", \":\"), ensure_ascii=True).encode(\"utf-8\")\n        with os.fdopen(descriptor, \"wb\", closefd=True) as handle:\n            descriptor = -1\n            handle.write(data)\n            handle.flush()\n            os.fsync(handle.fileno())\n        os.replace(tmp, path)\n        directory_fd = os.open(path.parent, os.O_RDONLY)\n        try:\n            os.fsync(directory_fd)\n        finally:\n            os.close(directory_fd)\n    finally:\n        if descriptor >= 0:\n            os.close(descriptor)\n        tmp.unlink(missing_ok=True)\n\n",
+        "rank": 1
+      },
+      {
+        "id": "ev_002",
+        "path": "broker/pkg/gpuservice/control_spool.go",
+        "language": "go",
+        "symbol": "Dir",
+        "source_refs": [
+          {
+            "path": "broker/pkg/gpuservice/control_spool.go",
+            "input_id": "input_0",
+            "source_namespace": "input_0",
+            "line_start": 98,
+            "line_end": 99,
+            "content_hash": "sha256:c296348c27447ab628bd220ef618755ddf39ad641ded094d0966883e7e905e48"
+          }
+        ],
+        "excerpt": "\nfunc (s *ControlSpool) Dir() string { return s.dir }",
+        "rank": 2
+      },
+      {
+        "id": "ev_003",
+        "path": "broker/cmd/common/gpu_services.go",
+        "language": "go",
+        "symbol": "",
+        "source_refs": [
+          {
+            "path": "broker/cmd/common/gpu_services.go",
+            "input_id": "input_0",
+            "source_namespace": "input_0",
+            "line_start": 1,
+            "line_end": 17,
+            "content_hash": "sha256:bad73acefc91a6cfc736ec20fc91a1c73df53a3afbdd7fd8c78797d6f1e09d3f"
+          }
+        ],
+        "excerpt": "package common\n\nimport (\n\t\"context\"\n\t\"errors\"\n\t\"fmt\"\n\t\"log\"\n\t\"time\"\n\n\t\"github.com/msk-mind/local-ai-broker/broker/pkg/backends\"\n\t\"github.com/msk-mind/local-ai-broker/broker/pkg/config\"\n\t\"github.com/msk-mind/local-ai-broker/broker/pkg/gpuservice\"\n)\n\n// StartGPUServiceControlPlane starts the scheduler owner independently from\n// request workers. A transient scheduler or health failure is retried while\n// the broker remains available for lexical evidence fallback.",
+        "rank": 16
+      },
+      {
+        "id": "ev_004",
+        "path": "broker/pkg/gpuservice/control_spool.go",
+        "language": "go",
+        "symbol": "ControlSpool",
+        "source_refs": [
+          {
+            "path": "broker/pkg/gpuservice/control_spool.go",
+            "input_id": "input_0",
+            "source_namespace": "input_0",
+            "line_start": 83,
+            "line_end": 87,
+            "content_hash": "sha256:e593c9fcadb6a071f390ee42776042d17993a8edb2bd1278ac429e5d08fe49c4"
+          }
+        ],
+        "excerpt": "type ControlSpool struct {\n\tdir   string\n\ttoken []byte\n\tnow   func() time.Time\n}",
+        "rank": 3
+      },
+      {
+        "id": "ev_005",
+        "path": "workers/rag-compression/service_control.py",
+        "language": "python",
+        "symbol": "_b64url",
+        "source_refs": [
+          {
+            "path": "workers/rag-compression/service_control.py",
+            "input_id": "input_0",
+            "source_namespace": "input_0",
+            "line_start": 36,
+            "line_end": 38,
+            "content_hash": "sha256:7b099035379637ac87704666a7220a73f09df201f3bd3f3d7cee079401ca7667"
+          }
+        ],
+        "excerpt": "def _b64url(value):\n    return base64.urlsafe_b64encode(str(value or \"\").encode(\"utf-8\")).decode(\"ascii\").rstrip(\"=\")\n\n",
+        "rank": 4
+      },
+      {
+        "id": "ev_006",
+        "path": "broker/cmd/common/gpu_services.go",
+        "language": "go",
+        "symbol": "runGPUServiceControlPlane",
+        "source_refs": [
+          {
+            "path": "broker/cmd/common/gpu_services.go",
+            "input_id": "input_0",
+            "source_namespace": "input_0",
+            "line_start": 48,
+            "line_end": 64,
+            "content_hash": "sha256:929ee6746c99d7242ab955af0b441bcbc20ab05f24fe88b35fb81da774d98b2a"
+          }
+        ],
+        "excerpt": "\nfunc runGPUServiceControlPlane(ctx context.Context, manager *gpuservice.Manager, logger *log.Logger, retryInterval time.Duration) {\n\tfor ctx.Err() == nil {\n\t\terr := manager.Run(ctx)\n\t\tif ctx.Err() != nil {\n\t\t\treturn\n\t\t}\n\t\tlogger.Printf(\"GPU service reconciler stopped: %v; retrying in %s\", err, retryInterval)\n\t\ttimer := time.NewTimer(retryInterval)\n\t\tselect {\n\t\tcase <-ctx.Done():\n\t\t\ttimer.Stop()\n\t\t\treturn\n\t\tcase <-timer.C:\n\t\t}\n\t}\n}",
+        "rank": 42
+      }
+    ],
+    "quality": {
+      "result": "evidence_only",
+      "retrieval": "gpu",
+      "reranking": "gpu",
+      "synthesis": "not_requested",
+      "answer_ready": false
+    },
+    "warnings": [],
+    "provenance": {
+      "repository_fingerprint": "sha256:019e80ae3a3563f39c0bc3fbf5ca3eb3c611a31abbba190715b7207b50983f5d",
+      "index_fingerprint": "sha256:b1f8474335d366f14f679af3182ce57aa36da8c2a52d9e4f4c3beb82ee0f91b6",
+      "retrieval_model_profile": "p40-retrieval-glm47",
+      "rerank_model_profile": "p40-retrieval-glm47"
+    },
+    "retrieval": {
+      "fingerprint": "sha256:b1f8474335d366f14f679af3182ce57aa36da8c2a52d9e4f4c3beb82ee0f91b6",
+      "fingerprint_sources": [
+        "git"
+      ],
+      "chunks_indexed": 45,
+      "lexical_candidates": 45,
+      "semantic_candidates": 45,
+      "fused_candidates": 45,
+      "reranked_candidates": 45,
+      "selected_evidence": 6,
+      "candidate_tokens": 9089,
+      "evidence_tokens": 1140,
+      "chunk_cache_total_files": 3,
+      "chunk_cache_reused_files": 0,
+      "chunk_cache_rebuilt_files": 3,
+      "lexical_index_cache_hit": false,
+      "semantic_index_cache_hit": false,
+      "semantic_index_document_count": 45,
+      "semantic_index_embedded_documents": 45,
+      "semantic_index_reused_documents": 0,
+      "budgets": {
+        "retrieval_token_budget": 16000,
+        "evidence_token_budget": 12000,
+        "final_pack_token_budget": 2048,
+        "synthesis_context_token_budget": 4000
+      },
+      "final_pack_tokens": 1229
+    },
+    "runtime": {
+      "attempts": [
+        {
+          "operation": "semantic_retrieval",
+          "tier": "p40-retrieval",
+          "slurm_job_id": "3674503",
+          "gpu_count": 1,
+          "gpu_type": "p40",
+          "model_profile": "p40-retrieval-glm47",
+          "attempt": 1,
+          "status": "succeeded",
+          "failure_category": "",
+          "escalation_reason": "primary_retrieval"
+        },
+        {
+          "operation": "rerank",
+          "tier": "p40-retrieval",
+          "slurm_job_id": "3674503",
+          "gpu_count": 1,
+          "gpu_type": "p40",
+          "model_profile": "p40-retrieval-glm47",
+          "attempt": 1,
+          "status": "succeeded",
+          "failure_category": "",
+          "escalation_reason": "semantic_candidates_ready"
+        }
+      ]
+    }
+  }
+}

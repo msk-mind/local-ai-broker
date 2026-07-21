@@ -1,0 +1,10 @@
+{
+  "broker_job_id": "job_80cba10114bd3346",
+  "task_type": "inspect_repo",
+  "slurm_job_id": "3673828",
+  "slurm_job_name": "broker-inspect_repo",
+  "node": "pllimsksparky1",
+  "started_at": "2026-07-13T21:45:59Z",
+  "completed_at": "2026-07-13T21:46:08Z",
+  "status": "completed"
+}

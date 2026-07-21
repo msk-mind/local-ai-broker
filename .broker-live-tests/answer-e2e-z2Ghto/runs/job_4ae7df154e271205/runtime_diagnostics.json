@@ -1,0 +1,64 @@
+{
+  "attempts": [
+    {
+      "operation": "semantic_retrieval",
+      "tier": "p40-retrieval",
+      "slurm_job_id": "3673248",
+      "gpu_count": 1,
+      "gpu_type": "p40",
+      "model_profile": "p40-retrieval-glm47",
+      "attempt": 1,
+      "status": "succeeded",
+      "failure_category": "",
+      "escalation_reason": "primary_retrieval"
+    },
+    {
+      "operation": "rerank",
+      "tier": "p40-retrieval",
+      "slurm_job_id": "3673248",
+      "gpu_count": 1,
+      "gpu_type": "p40",
+      "model_profile": "p40-retrieval-glm47",
+      "attempt": 1,
+      "status": "succeeded",
+      "failure_category": "",
+      "escalation_reason": "semantic_candidates_ready"
+    },
+    {
+      "operation": "synthesis",
+      "tier": "p40-synthesis",
+      "slurm_job_id": "3673249",
+      "gpu_count": 1,
+      "gpu_type": "p40",
+      "model_profile": "p40-synthesis-glm47",
+      "attempt": 1,
+      "status": "failed",
+      "failure_category": "timeout",
+      "escalation_reason": "primary_synthesis"
+    },
+    {
+      "operation": "synthesis",
+      "tier": "v100-reasoning",
+      "slurm_job_id": "",
+      "gpu_count": 4,
+      "gpu_type": "",
+      "model_profile": "",
+      "attempt": 1,
+      "status": "failed",
+      "failure_category": "queue_delay",
+      "escalation_reason": "p40_timeout"
+    },
+    {
+      "operation": "synthesis",
+      "tier": "a100-single",
+      "slurm_job_id": "",
+      "gpu_count": 1,
+      "gpu_type": "",
+      "model_profile": "",
+      "attempt": 1,
+      "status": "failed",
+      "failure_category": "queue_delay",
+      "escalation_reason": "v100_queue_delay"
+    }
+  ]
+}

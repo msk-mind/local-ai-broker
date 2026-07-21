@@ -1,0 +1,18 @@
+{
+  "created_at": "2026-07-15T20:50:02.890987Z",
+  "base_url": "http://127.0.0.1:18081",
+  "runner": "tests/e2e/run_inspect_repo_gpu_perf_proof.sh",
+  "proof_script": "tests/acceptance/inspect_repo/perf_proof.py",
+  "adapter_script": "tests/acceptance/inspect_repo/broker_perf_adapter.py",
+  "expected_fingerprint_source": "input_manifest",
+  "require_zero_repository_fingerprint_ms": true,
+  "require_gpu_retrieval_and_reranking": true,
+  "proof_ok": true,
+  "proof_exit_status": 0,
+  "validation_ok": true,
+  "validation_exit_status": 0,
+  "validation_errors": [],
+  "notes": [
+    "command path reused the changed-file chunk state from the shared broker cache instead of rebuilding it locally"
+  ]
+}

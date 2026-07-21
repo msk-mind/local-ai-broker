@@ -1,0 +1,47 @@
+{
+  "service_id": "gpu-p40-retrieval-3e7ac3773a0f79d9",
+  "tier": "p40-retrieval",
+  "role": "retrieval",
+  "registry_path": "/gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker/.broker-live-tests/perf-proof-final-70xmEB/gpu-services.json",
+  "registration_token": "df9f4b67874584e4ce6b269e181047db67ed5eeb2522b4f58500abf3eed9197b",
+  "heartbeat_interval_seconds": 15,
+  "lease_duration_seconds": 14400,
+  "capabilities": [
+    "embeddings",
+    "index_status",
+    "index_upsert",
+    "faiss_search",
+    "rerank"
+  ],
+  "deployment": {
+    "name": "p40-retrieval-glm47",
+    "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+    "quantization": "Q4_K_M",
+    "context_limit_tokens": 8192,
+    "runtime": "/gpfs/mskmind_ess/limr/repos/llama.cpp/build-clean/bin/llama-server",
+    "runtime_args": [
+      "--model",
+      "{model_path}",
+      "--host",
+      "{host}",
+      "--port",
+      "{port}",
+      "--ctx-size",
+      "{context_limit_tokens}",
+      "--n-gpu-layers",
+      "999",
+      "--embeddings",
+      "--reranking",
+      "--pooling",
+      "mean"
+    ]
+  },
+  "placement": {
+    "partition": "hpc",
+    "gpu": {
+      "type": "p40",
+      "count": 1
+    },
+    "nodelist": "pllimsksparky[1-4]"
+  }
+}

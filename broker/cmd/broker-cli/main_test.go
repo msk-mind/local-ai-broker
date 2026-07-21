@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -78,5 +81,45 @@ func TestVerifyAuditFile(t *testing.T) {
 	}
 	if len(data) == 0 {
 		t.Fatal("expected audit file content")
+	}
+}
+
+func TestQuoteHelpersAndEnvOrDefault(t *testing.T) {
+	if got := quoteIfNeeded("plain"); got != "plain" {
+		t.Fatalf("unexpected plain quote behavior: %q", got)
+	}
+	if got := quoteIfNeeded("two words"); got != `"two words"` {
+		t.Fatalf("unexpected spaced quote behavior: %q", got)
+	}
+
+	t.Setenv("BROKER_CLI_TEST_ENV", "set")
+	if got := envOrDefault("BROKER_CLI_TEST_ENV", "fallback"); got != "set" {
+		t.Fatalf("unexpected env override: %q", got)
+	}
+	if got := envOrDefault("BROKER_CLI_TEST_ENV_MISSING", "fallback"); got != "fallback" {
+		t.Fatalf("unexpected env fallback: %q", got)
+	}
+}
+
+func TestDoJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if string(body) != `{"ok":true}` {
+			t.Fatalf("unexpected request body: %q", string(body))
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"job_id":"job_123"}`))
+	}))
+	defer server.Close()
+
+	got := doJSON(server.Client(), http.MethodPost, server.URL, []byte(`{"ok":true}`))
+	if got != `{"job_id":"job_123"}` {
+		t.Fatalf("unexpected response body: %q", got)
 	}
 }

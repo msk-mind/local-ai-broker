@@ -1,0 +1,19 @@
+{
+  "schema": "gpu_service_demand_response_v1",
+  "request_id": "req_44074a3cf06e1dbc9fef4de5ca63aab8",
+  "demand_id": "gpu-demand-c985bf5b04956698",
+  "state": "failed",
+  "failure_category": "service_failure",
+  "updated_at": "2026-07-13T22:16:24.383044612Z",
+  "error": "scheduler service job is CANCELLED by 164079479",
+  "service_diagnostics": {
+    "tier": "a100-single",
+    "slurm_job_id": "3674400",
+    "gpu": {
+      "type": "a100",
+      "count": 1
+    },
+    "model_profile": "a100-single-qwen30b"
+  },
+  "signature": "f274bbb2589d0f45ca9e4c62edee938941c9a3b3244fb3cd0f63fd2647cb7f70"
+}

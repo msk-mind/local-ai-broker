@@ -1,0 +1,134 @@
+{
+  "first": {
+    "elapsed_seconds": 21.941811323165894,
+    "retrieval": {
+      "fingerprint": "sha256:8c80e04b9c0873a95a741b21ff343f882bdced4481115d13edae13716065d022",
+      "fingerprint_sources": [
+        "git"
+      ],
+      "chunks_indexed": 45,
+      "lexical_candidates": 45,
+      "semantic_candidates": 45,
+      "fused_candidates": 45,
+      "reranked_candidates": 45,
+      "selected_evidence": 6,
+      "candidate_tokens": 9089,
+      "evidence_tokens": 2054,
+      "chunk_cache_total_files": 3,
+      "chunk_cache_reused_files": 0,
+      "chunk_cache_rebuilt_files": 3,
+      "lexical_index_cache_hit": false,
+      "semantic_index_cache_hit": false,
+      "semantic_index_document_count": 45,
+      "semantic_index_embedded_documents": 0,
+      "semantic_index_reused_documents": 45,
+      "budgets": {
+        "retrieval_token_budget": 32000,
+        "evidence_token_budget": 12000,
+        "final_pack_token_budget": 8000,
+        "synthesis_context_token_budget": 24000
+      },
+      "final_pack_tokens": 2158
+    },
+    "quality": {
+      "result": "evidence_only",
+      "retrieval": "gpu",
+      "reranking": "gpu",
+      "synthesis": "not_requested",
+      "answer_ready": false
+    },
+    "log_before": {
+      "embeddings": 0,
+      "index_status": 0,
+      "index_upsert": 0,
+      "search": 0,
+      "rerank": 0
+    },
+    "log_after": {
+      "embeddings": 8,
+      "index_status": 2,
+      "index_upsert": 2,
+      "search": 1,
+      "rerank": 2
+    },
+    "log_delta": {
+      "embeddings": 8,
+      "index_status": 2,
+      "index_upsert": 2,
+      "search": 1,
+      "rerank": 2
+    },
+    "provenance": {
+      "repository_fingerprint": "sha256:d8ec7a41c13ff8ca8455d4a6f372d8adc3379220162056601ceb85326925bbfc",
+      "index_fingerprint": "sha256:8c80e04b9c0873a95a741b21ff343f882bdced4481115d13edae13716065d022",
+      "retrieval_model_profile": "p40-retrieval-glm47",
+      "rerank_model_profile": "p40-retrieval-glm47"
+    }
+  },
+  "second": {
+    "elapsed_seconds": 20.435490131378174,
+    "retrieval": {
+      "fingerprint": "sha256:eeda2403693aa347771d30a843000c296c04954dfd499be588ab91d255fb2be3",
+      "fingerprint_sources": [
+        "git"
+      ],
+      "chunks_indexed": 45,
+      "lexical_candidates": 45,
+      "semantic_candidates": 45,
+      "fused_candidates": 45,
+      "reranked_candidates": 45,
+      "selected_evidence": 6,
+      "candidate_tokens": 9089,
+      "evidence_tokens": 2054,
+      "chunk_cache_total_files": 3,
+      "chunk_cache_reused_files": 3,
+      "chunk_cache_rebuilt_files": 0,
+      "lexical_index_cache_hit": false,
+      "semantic_index_cache_hit": false,
+      "semantic_index_document_count": 45,
+      "semantic_index_embedded_documents": 0,
+      "semantic_index_reused_documents": 45,
+      "budgets": {
+        "retrieval_token_budget": 32000,
+        "evidence_token_budget": 12000,
+        "final_pack_token_budget": 8000,
+        "synthesis_context_token_budget": 24000
+      },
+      "final_pack_tokens": 2158
+    },
+    "quality": {
+      "result": "evidence_only",
+      "retrieval": "gpu",
+      "reranking": "gpu",
+      "synthesis": "not_requested",
+      "answer_ready": false
+    },
+    "log_before": {
+      "embeddings": 8,
+      "index_status": 2,
+      "index_upsert": 2,
+      "search": 1,
+      "rerank": 2
+    },
+    "log_after": {
+      "embeddings": 16,
+      "index_status": 4,
+      "index_upsert": 4,
+      "search": 2,
+      "rerank": 3
+    },
+    "log_delta": {
+      "embeddings": 8,
+      "index_status": 2,
+      "index_upsert": 2,
+      "search": 1,
+      "rerank": 1
+    },
+    "provenance": {
+      "repository_fingerprint": "sha256:39e5b890ddea967348e6020cb9ce753d87d451f0a4299634d1263fb929943dde",
+      "index_fingerprint": "sha256:eeda2403693aa347771d30a843000c296c04954dfd499be588ab91d255fb2be3",
+      "retrieval_model_profile": "p40-retrieval-glm47",
+      "rerank_model_profile": "p40-retrieval-glm47"
+    }
+  }
+}

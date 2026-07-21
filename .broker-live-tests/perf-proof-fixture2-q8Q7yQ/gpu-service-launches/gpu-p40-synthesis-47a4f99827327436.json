@@ -1,0 +1,39 @@
+{
+  "service_id": "gpu-p40-synthesis-47a4f99827327436",
+  "tier": "p40-synthesis",
+  "role": "synthesis",
+  "registry_path": "/gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker/.broker-live-tests/perf-proof-fixture2-q8Q7yQ/gpu-services.json",
+  "registration_token": "28831a2edfe737aa4dc88a626fb00cd7ea4af3d6cf0c0b4cce1d01d3a3b02dd5",
+  "heartbeat_interval_seconds": 15,
+  "lease_duration_seconds": 14400,
+  "capabilities": [
+    "chat_completions"
+  ],
+  "deployment": {
+    "name": "p40-synthesis-glm47",
+    "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+    "quantization": "Q4_K_M",
+    "context_limit_tokens": 8192,
+    "runtime": "/gpfs/mskmind_ess/limr/repos/llama.cpp/build-clean/bin/llama-server",
+    "runtime_args": [
+      "--model",
+      "{model_path}",
+      "--host",
+      "{host}",
+      "--port",
+      "{port}",
+      "--ctx-size",
+      "{context_limit_tokens}",
+      "--n-gpu-layers",
+      "999"
+    ]
+  },
+  "placement": {
+    "partition": "hpc",
+    "gpu": {
+      "type": "p40",
+      "count": 1
+    },
+    "nodelist": "pllimsksparky[1-4]"
+  }
+}

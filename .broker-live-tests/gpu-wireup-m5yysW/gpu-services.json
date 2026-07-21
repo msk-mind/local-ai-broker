@@ -1,0 +1,72 @@
+{
+  "schema": "gpu_service_registry_v1",
+  "updated_at": "2026-07-13T20:51:14.694103Z",
+  "records": [
+    {
+      "id": "gpu-p40-synthesis-ce168eb298dff85c",
+      "tier": "p40-synthesis",
+      "role": "synthesis",
+      "state": "ready",
+      "endpoint": "http://pllimsksparky2.mskcc.org:36733",
+      "endpoint_auth": {
+        "type": "bearer",
+        "bearer_token": "PQfk1IT85ijiaN4jDe6Qp1NyNaNn7equP7BH4a1kVaFMdVHbxVTXufIaSQmy18LZ"
+      },
+      "model_profile": "p40-synthesis-glm47",
+      "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+      "capabilities": [
+        "chat_completions"
+      ],
+      "context_limit_tokens": 8192,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "slurm_job_id": "3672818",
+      "scheduler_state": "RUNNING",
+      "created_at": "2026-07-13T19:57:49.774111954Z",
+      "startup_deadline": "2026-07-13T20:01:48.692054804Z",
+      "heartbeat_at": "2026-07-13T20:02:09.291320Z",
+      "lease_expires_at": "2026-07-14T00:02:09.291320Z",
+      "absolute_lease_expires_at": "0001-01-01T00:00:00Z",
+      "last_health_check_at": "2026-07-13T20:01:50.073840147Z",
+      "registration_token_sha256": "633f97aa906ae1f79bd8f06cb645b88c31b465d7d3ecb2648ce1677548975e83"
+    },
+    {
+      "id": "gpu-p40-retrieval-5b181c22e84bc414",
+      "tier": "p40-retrieval",
+      "role": "retrieval",
+      "state": "ready",
+      "endpoint_auth": {
+        "type": "bearer",
+        "bearer_token": "yQPmaGD5ophaY9QAixY5mVj8dUuVD_OBZP4rqPRnDNGzE3CG_4JNyo4wcstsfttm"
+      },
+      "model_profile": "p40-retrieval-glm47",
+      "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+      "capabilities": [
+        "embeddings",
+        "index_status",
+        "index_upsert",
+        "faiss_search",
+        "rerank"
+      ],
+      "context_limit_tokens": 8192,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "slurm_job_id": "3672864",
+      "scheduler_state": "RUNNING",
+      "created_at": "2026-07-13T20:01:05.400946479Z",
+      "startup_deadline": "2026-07-13T20:05:05.243578998Z",
+      "heartbeat_at": "2026-07-13T20:51:14.694064Z",
+      "lease_expires_at": "2026-07-14T00:51:14.694064Z",
+      "absolute_lease_expires_at": "0001-01-01T00:00:00Z",
+      "last_health_check_at": "0001-01-01T00:00:00Z",
+      "registration_token_sha256": "c7f4d891ffbd9912378974b729c3a4d53f452eaaf7eda4a819d0e636e7d0c841",
+      "endpoint": "http://pllimsksparky1.mskcc.org:38605",
+      "health_error": "",
+      "failure_category": ""
+    }
+  ]
+}

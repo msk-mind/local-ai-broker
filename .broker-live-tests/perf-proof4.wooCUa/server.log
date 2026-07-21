@@ -1,0 +1,5 @@
+broker-server 2026/07/14 08:45:59 audit verification ok path=.broker-live-tests/perf-proof4.wooCUa/audit.jsonl events=0 last_hash=
+broker-server 2026/07/14 08:45:59 listening on 127.0.0.1:42153
+broker-server 2026/07/14 08:46:03 submitted job=job_897b907e64fd75de task_type=inspect_repo backend_run_id=job_897b907e64fd75de cache_key_ms=1980 stage_bundle_ms=44 backend_submit_ms=207 total_submit_ms=2269
+broker-server 2026/07/14 08:46:53 submitted job=job_bafb4aaa87568a4e task_type=inspect_repo backend_run_id=job_bafb4aaa87568a4e cache_key_ms=1847 stage_bundle_ms=32 backend_submit_ms=236 total_submit_ms=2150
+broker-server 2026/07/14 08:46:57 received signal terminated, shutting down

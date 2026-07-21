@@ -1,0 +1,268 @@
+{
+  "description": "CPU-only deterministic snapshots used to exercise the evaluator. answer_ready records are synthetic GPU-quality contract fixtures; evaluating the file itself never contacts a GPU.",
+  "results": [
+    {
+      "id": "root_cause_false_real_local",
+      "answer_ready": true,
+      "ranked_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "broker/pkg/schemas/validate.go",
+        "broker/pkg/service/service_runtime.go",
+        "workers/rag-compression/main.py"
+      ]
+    },
+    {
+      "id": "mcp_inspect_repo_call_chain",
+      "answer_ready": true,
+      "ranked_paths": [
+        "broker/pkg/mcp/server.go",
+        "broker/pkg/service/service_submission.go",
+        "broker/pkg/tasks/catalog.go",
+        "broker/pkg/service/service_execution.go",
+        "workers/rag-compression/main.py",
+        "workers/rag-compression/inspection_pipeline.py"
+      ]
+    },
+    {
+      "id": "mcp_query_mode_normalization",
+      "ranked_paths": [
+        "broker/pkg/mcp/server.go",
+        "broker/pkg/tasks/catalog.go",
+        "broker/pkg/types/types.go"
+      ]
+    },
+    {
+      "id": "repo_inspection_v2_schema",
+      "answer_ready": true,
+      "ranked_paths": [
+        "broker/pkg/schemas/validate.go",
+        "workers/rag-compression/inspection_pipeline.py",
+        "broker/pkg/schemas/validate_test.go"
+      ]
+    },
+    {
+      "id": "cpu_cannot_be_answer_ready",
+      "answer_ready": true,
+      "ranked_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/gpu_client.py",
+        "broker/pkg/schemas/validate.go",
+        "broker/pkg/service/service_job_refresh.go"
+      ]
+    },
+    {
+      "id": "syntax_aware_chunk_metadata",
+      "ranked_paths": [
+        "workers/rag-compression/inspection_index.py",
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/main.py"
+      ]
+    },
+    {
+      "id": "faiss_fts_hybrid_retrieval",
+      "ranked_paths": [
+        "workers/rag-compression/inspection_index.py",
+        "workers/rag-compression/gpu_client.py",
+        "workers/rag-compression/inspection_pipeline.py"
+      ]
+    },
+    {
+      "id": "rrf_rerank_diversity",
+      "ranked_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/inspection_index.py",
+        "workers/rag-compression/gpu_client.py"
+      ]
+    },
+    {
+      "id": "dirty_repo_fingerprint",
+      "ranked_paths": [
+        "workers/rag-compression/inspection_index.py",
+        "workers/rag-compression/inspection_pipeline.py",
+        "broker/pkg/cache/cache.go"
+      ]
+    },
+    {
+      "id": "citation_release_validation",
+      "answer_ready": true,
+      "ranked_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "broker/pkg/schemas/validate.go",
+        "workers/rag-compression/main.py"
+      ]
+    },
+    {
+      "id": "same_tier_validation_retry",
+      "ranked_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/gpu_client.py",
+        "broker/pkg/service/service_runtime.go"
+      ]
+    },
+    {
+      "id": "strict_gpu_escalation_order",
+      "answer_ready": true,
+      "ranked_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/gpu_client.py",
+        "broker/pkg/gpuservice/adaptive.go"
+      ]
+    },
+    {
+      "id": "warm_p40_service_roles",
+      "ranked_paths": [
+        "broker/pkg/gpuservice/types.go",
+        "broker/pkg/gpuservice/config.go",
+        "broker/pkg/config/config.go",
+        "broker/pkg/service/service.go"
+      ]
+    },
+    {
+      "id": "registry_lease_heartbeat",
+      "ranked_paths": [
+        "broker/pkg/gpuservice/registry.go",
+        "broker/pkg/gpuservice/types.go",
+        "broker/pkg/service/service.go"
+      ]
+    },
+    {
+      "id": "unhealthy_p40_replacement",
+      "ranked_paths": [
+        "broker/pkg/gpuservice/reconciler.go",
+        "broker/pkg/gpuservice/health.go",
+        "broker/pkg/gpuservice/registry.go",
+        "broker/pkg/backends/slurm/backend.go"
+      ]
+    },
+    {
+      "id": "capability_replica_health",
+      "ranked_paths": [
+        "broker/pkg/mcp/server.go",
+        "broker/pkg/gpuservice/reconciler.go",
+        "broker/pkg/gpuservice/types.go",
+        "broker/pkg/tasks/catalog.go"
+      ]
+    },
+    {
+      "id": "v100_four_gpu_placement",
+      "ranked_paths": [
+        "broker/pkg/backends/slurm/backend.go",
+        "broker/pkg/backends/slurm/gpu_service.go",
+        "broker/pkg/config/config.go",
+        "broker/pkg/gpuservice/config.go",
+        "configs/broker/slurm-p40-a100.env.example"
+      ]
+    },
+    {
+      "id": "adaptive_a100_gpu_count",
+      "ranked_paths": [
+        "broker/pkg/gpuservice/adaptive.go",
+        "workers/rag-compression/inspection_pipeline.py",
+        "broker/pkg/backends/slurm/backend.go",
+        "broker/pkg/config/config.go"
+      ]
+    },
+    {
+      "id": "service_startup_not_request_worker",
+      "ranked_paths": [
+        "broker/pkg/gpuservice/reconciler.go",
+        "broker/pkg/backends/slurm/gpu_service.go",
+        "deploy/slurm/gpu_service.slurm",
+        "broker/pkg/service/service_submission.go",
+        "workers/rag-compression/main.py"
+      ]
+    },
+    {
+      "id": "registry_auth_redaction",
+      "ranked_paths": [
+        "broker/pkg/gpuservice/types.go",
+        "workers/rag-compression/gpu_client.py",
+        "workers/gpu-service/main.py",
+        "broker/pkg/service/service_runtime.go",
+        "broker/pkg/audit/audit.go"
+      ]
+    },
+    {
+      "id": "token_explicit_budgets",
+      "ranked_paths": [
+        "broker/pkg/types/types.go",
+        "broker/pkg/mcp/server.go",
+        "workers/rag-compression/inspection_pipeline.py",
+        "broker/pkg/schemas/validate.go"
+      ]
+    },
+    {
+      "id": "compact_release_optional_trace",
+      "ranked_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/main.py",
+        "broker/pkg/service/service.go"
+      ]
+    },
+    {
+      "id": "broker_restart_registry_recovery",
+      "ranked_paths": [
+        "broker/pkg/gpuservice/registry.go",
+        "broker/pkg/gpuservice/reconciler.go",
+        "broker/pkg/store/file.go"
+      ]
+    },
+    {
+      "id": "concurrent_scale_limits",
+      "ranked_paths": [
+        "broker/pkg/gpuservice/types.go",
+        "broker/pkg/gpuservice/registry.go",
+        "broker/pkg/gpuservice/reconciler.go",
+        "broker/pkg/gpuservice/config.go"
+      ]
+    },
+    {
+      "id": "authorized_repo_inputs",
+      "ranked_paths": [
+        "broker/pkg/service/service_submission.go",
+        "broker/pkg/service/service_execution.go",
+        "workers/rag-compression/main.py"
+      ]
+    },
+    {
+      "id": "audit_gpu_attempts",
+      "ranked_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "broker/pkg/service/service_runtime.go"
+      ]
+    },
+    {
+      "id": "fingerprinted_index_cache",
+      "ranked_paths": [
+        "workers/rag-compression/inspection_index.py",
+        "workers/rag-compression/inspection_pipeline.py"
+      ]
+    },
+    {
+      "id": "required_deployment_profiles",
+      "ranked_paths": [
+        "broker/pkg/config/config.go",
+        "broker/pkg/gpuservice/config.go",
+        "broker/pkg/gpuservice/config_test.go",
+        "configs/broker/slurm-p40-a100.env.example",
+        "docs/operations.md"
+      ]
+    },
+    {
+      "id": "staged_worker_cli_contract",
+      "ranked_paths": [
+        "workers/rag-compression/main.py",
+        "broker/pkg/service/service_execution.go",
+        "deploy/local/broker_worker.sh",
+        "docs/worker-runtime.md"
+      ]
+    },
+    {
+      "id": "remove_canned_query_handlers",
+      "ranked_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/main.py"
+      ]
+    }
+  ]
+}

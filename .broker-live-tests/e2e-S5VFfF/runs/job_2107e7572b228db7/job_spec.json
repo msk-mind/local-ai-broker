@@ -1,0 +1,30 @@
+{
+  "constraints": {},
+  "job_id": "job_2107e7572b228db7",
+  "output_schema": {
+    "name": "repo_inspection_v2"
+  },
+  "task_params": {
+    "_broker_exclude_dirs": [
+      ".git",
+      ".broker",
+      "__pycache__",
+      ".pytest_cache",
+      ".mypy_cache",
+      ".ruff_cache",
+      ".tox",
+      ".venv",
+      "venv",
+      "env",
+      "node_modules",
+      "site-packages",
+      "build",
+      "dist"
+    ],
+    "_broker_repo_root": "/gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker",
+    "_broker_run_root": "/gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker/.broker-live-tests/e2e-S5VFfF/runs",
+    "mode": "evidence",
+    "query": "Where is the GPU service control plane started for the broker transports?"
+  },
+  "task_type": "inspect_repo"
+}

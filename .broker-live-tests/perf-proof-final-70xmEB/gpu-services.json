@@ -1,0 +1,110 @@
+{
+  "schema": "gpu_service_registry_v1",
+  "updated_at": "2026-07-13T22:16:54.207606145Z",
+  "records": [
+    {
+      "id": "gpu-p40-retrieval-3e7ac3773a0f79d9",
+      "tier": "p40-retrieval",
+      "role": "retrieval",
+      "state": "starting",
+      "endpoint_auth": {
+        "type": "",
+        "bearer_token": ""
+      },
+      "model_profile": "p40-retrieval-glm47",
+      "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+      "capabilities": [
+        "embeddings",
+        "index_status",
+        "index_upsert",
+        "faiss_search",
+        "rerank"
+      ],
+      "context_limit_tokens": 8192,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "slurm_job_id": "3674424",
+      "scheduler_state": "PENDING",
+      "created_at": "2026-07-13T22:16:24.299069165Z",
+      "startup_deadline": "2026-07-13T22:26:24.164127434Z",
+      "heartbeat_at": "0001-01-01T00:00:00Z",
+      "lease_expires_at": "2026-07-14T02:16:24.299069165Z",
+      "absolute_lease_expires_at": "0001-01-01T00:00:00Z",
+      "last_health_check_at": "0001-01-01T00:00:00Z",
+      "registration_token_sha256": "2c0bbda7e48af5d1efff280a6646617bf8688d675075cc91f6a899c2da1e4daa"
+    },
+    {
+      "id": "gpu-p40-synthesis-da44d0e5168e4f4d",
+      "tier": "p40-synthesis",
+      "role": "synthesis",
+      "state": "starting",
+      "endpoint_auth": {
+        "type": "",
+        "bearer_token": ""
+      },
+      "model_profile": "p40-synthesis-glm47",
+      "model": "/gpfs/cdsi_ess/home/limr/.cache/llama.cpp/GLM-4.7-Flash-Q4_K_M.gguf",
+      "capabilities": [
+        "chat_completions"
+      ],
+      "context_limit_tokens": 8192,
+      "gpu": {
+        "type": "p40",
+        "count": 1
+      },
+      "slurm_job_id": "3674425",
+      "scheduler_state": "PENDING",
+      "created_at": "2026-07-13T22:16:24.345873619Z",
+      "startup_deadline": "2026-07-13T22:26:24.164127434Z",
+      "heartbeat_at": "0001-01-01T00:00:00Z",
+      "lease_expires_at": "2026-07-14T02:16:24.345873619Z",
+      "absolute_lease_expires_at": "0001-01-01T00:00:00Z",
+      "last_health_check_at": "0001-01-01T00:00:00Z",
+      "registration_token_sha256": "06a551d3078046e532f389b534faaaa69f4a2e2a6284fe34fab5f654e020f309"
+    }
+  ],
+  "demands": [
+    {
+      "id": "gpu-demand-c985bf5b04956698",
+      "tier": "a100-single",
+      "state": "failed",
+      "failure_category": "service_failure",
+      "reason": "v100_queue_delay",
+      "requested_at": "2026-07-13T22:08:54.173386233Z",
+      "deadline": "2026-07-13T22:18:39.807076272Z",
+      "service_id": "gpu-a100-single-4d39fefaad874223",
+      "service_diagnostics": {
+        "tier": "a100-single",
+        "slurm_job_id": "3674400",
+        "gpu": {
+          "type": "a100",
+          "count": 1
+        },
+        "model_profile": "a100-single-qwen30b"
+      },
+      "error": "scheduler service job is CANCELLED by 164079479"
+    },
+    {
+      "id": "gpu-demand-287075a3995cd59f",
+      "tier": "p40-retrieval",
+      "state": "failed",
+      "failure_category": "service_failure",
+      "reason": "GPU reranking is required for inspect_repo",
+      "requested_at": "2026-07-13T22:15:54.169644962Z",
+      "deadline": "2026-07-13T22:25:39.256014779Z",
+      "service_id": "gpu-p40-retrieval-796b643b8ac6989d",
+      "service_diagnostics": {
+        "tier": "p40-retrieval",
+        "slurm_job_id": "3674224",
+        "gpu": {
+          "type": "p40",
+          "count": 1
+        },
+        "model_profile": "p40-retrieval-glm47"
+      },
+      "error": "scheduler service job is CANCELLED by 164079479"
+    }
+  ]
+}

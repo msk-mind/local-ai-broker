@@ -1,0 +1,21 @@
+{
+  "execution_profile": {
+    "tier": "cpu-rag-indexing",
+    "runtime": "deterministic"
+  },
+  "gpu_service_control_token": "perf-fixture-token-1783979923",
+  "gpu_service_health_interval_seconds": 15,
+  "gpu_service_registry_path": "/gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker/.broker-live-tests/perf-proof-fixture-mFJkOy/gpu-services.json",
+  "gpu_service_request_path": "/gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker/.broker-live-tests/perf-proof-fixture-mFJkOy/gpu-services.json.requests",
+  "gpu_service_startup_timeout_seconds": 600,
+  "job_id": "job_b2412be7e08d84d8",
+  "repo_inspection_cache_path": ".broker-live-tests/perf-proof-fixture-mFJkOy/runs/repo-inspection-cache",
+  "resource_tier": "cpu-rag-indexing",
+  "runtime_backend": "deterministic",
+  "runtime_connection": {
+    "base_url": "",
+    "timeout_seconds": 0
+  },
+  "selected_model": "",
+  "task_type": "inspect_repo"
+}

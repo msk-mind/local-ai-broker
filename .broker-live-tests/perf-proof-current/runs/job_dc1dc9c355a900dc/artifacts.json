@@ -1,0 +1,20 @@
+[
+  {
+    "artifact_id": "artifact_evidence_pack",
+    "artifact_type": "evidence_pack",
+    "path": ".broker-live-tests/perf-proof-current/runs/job_dc1dc9c355a900dc/evidence_pack.json",
+    "classification": "internal"
+  },
+  {
+    "artifact_id": "artifact_retrieval_result",
+    "artifact_type": "retrieval_result",
+    "path": ".broker-live-tests/perf-proof-current/runs/job_dc1dc9c355a900dc/retrieval_result.json",
+    "classification": "internal"
+  },
+  {
+    "artifact_id": "artifact_runtime_diagnostics",
+    "artifact_type": "runtime_diagnostics",
+    "path": ".broker-live-tests/perf-proof-current/runs/job_dc1dc9c355a900dc/runtime_diagnostics.json",
+    "classification": "internal"
+  }
+]

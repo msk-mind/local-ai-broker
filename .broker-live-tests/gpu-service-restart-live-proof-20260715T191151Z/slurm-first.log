@@ -1,0 +1,3 @@
+gpu-proxy: "POST /v1/indexes/upsert HTTP/1.1" 200 -
+gpu-proxy: "POST /v1/search HTTP/1.1" 200 -
+[2026-07-15T15:11:59.681] error: *** JOB 3686110 ON pllimsksparky1 CANCELLED AT 2026-07-15T15:11:59 DUE to SIGNAL Terminated ***

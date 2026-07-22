@@ -122,7 +122,11 @@ When GPU retrieval or reranking is unavailable, `mode=auto`, `mode=evidence`, an
 - `final_pack_token_budget`
 - `synthesis_context_token_budget`
 
-When explicitly set, `final_pack_token_budget` must be at least 2,048 tokens, and an inspection query is limited to 2,048 UTF-8 bytes. These submission bounds ensure the required structured contract and retry diagnostics always fit. If a stage overruns budget, the worker trims deterministically or fails validation before release.
+When explicitly set, `final_pack_token_budget` must be at least 2,048 tokens for evidence-only inspection and 4,096 tokens for `answer` mode. An inspection query is limited to 2,048 UTF-8 bytes. These submission bounds ensure the required structured contract and retry diagnostics fit. If a stage overruns budget, the worker trims deterministically or fails validation before release.
+
+`max_runtime_seconds` is optional, applies to worker execution after the backend starts, and is capped at 24 hours. The broker cancels timed-out local or Slurm work and reports `timed_out` with a `runtime_limit` diagnostic. GPU service startup and queue deadlines remain separate control-plane limits.
+
+Token counts use a conservative character-based estimate for code and JSON rather than a model-specific tokenizer. GPU synthesis uses the smaller of the configured `synthesis_context_token_budget` and the selected endpoint's advertised context limit; the safe default is 16,000 tokens.
 
 ## Scheduling
 

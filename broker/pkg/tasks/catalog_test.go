@@ -120,4 +120,21 @@ func TestValidateInspectRepoBoundsQueryAndFinalPack(t *testing.T) {
 	if err := ValidateSubmitRequest(base); err != nil {
 		t.Fatalf("expected practical minimum final pack budget to pass: %v", err)
 	}
+	answer := base
+	answer.TaskParams = map[string]any{"query": "trace routing", "mode": "answer"}
+	answer.Constraints.FinalPackTokenBudget = MinInspectRepoFinalPackTokens
+	if err := ValidateSubmitRequest(answer); err == nil {
+		t.Fatal("expected answer mode to require the larger final pack budget")
+	}
+	answer.Constraints.FinalPackTokenBudget = MinInspectRepoAnswerPackTokens
+	if err := ValidateSubmitRequest(answer); err != nil {
+		t.Fatalf("expected answer mode minimum to pass: %v", err)
+	}
+	for _, value := range []int{-1, MaxRuntimeSeconds + 1} {
+		runtime := base
+		runtime.Constraints.MaxRuntimeSeconds = value
+		if err := ValidateSubmitRequest(runtime); err == nil {
+			t.Fatalf("expected max_runtime_seconds=%d to fail", value)
+		}
+	}
 }

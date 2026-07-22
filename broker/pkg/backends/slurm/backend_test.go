@@ -59,6 +59,21 @@ func TestParseSlurmState(t *testing.T) {
 	}
 }
 
+func TestFormatSlurmTimeLimit(t *testing.T) {
+	for _, test := range []struct {
+		seconds int
+		want    string
+	}{
+		{seconds: 1, want: "00:00:01"},
+		{seconds: 3661, want: "01:01:01"},
+		{seconds: 86400, want: "24:00:00"},
+	} {
+		if got := formatSlurmTimeLimit(test.seconds); got != test.want {
+			t.Fatalf("formatSlurmTimeLimit(%d) = %q, want %q", test.seconds, got, test.want)
+		}
+	}
+}
+
 func TestSubmitRunCommandMode(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin:/bin")
 	cfg := config.Config{

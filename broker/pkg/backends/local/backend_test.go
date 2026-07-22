@@ -41,6 +41,25 @@ func TestGetRunFromHeartbeatCompleted(t *testing.T) {
 	}
 }
 
+func TestGetRunFromRuntimeTimeoutMarker(t *testing.T) {
+	runRoot := t.TempDir()
+	runDir := filepath.Join(runRoot, "job_timeout")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, runtimeTimeoutMarker), []byte("runtime limit exceeded\n"), 0o600); err != nil {
+		t.Fatalf("write timeout marker: %v", err)
+	}
+	backend := NewBackend(config.Config{LocalMode: "command", RunRootPath: runRoot})
+	status, err := backend.GetRun(context.Background(), "job_timeout")
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if status.State != types.JobStateTimedOut || status.Diagnostics["runtime_timeout"] != true {
+		t.Fatalf("expected runtime timeout status, got %#v", status)
+	}
+}
+
 func TestGetRunRunningFromPID(t *testing.T) {
 	runRoot := t.TempDir()
 	runDir := filepath.Join(runRoot, "job_123")

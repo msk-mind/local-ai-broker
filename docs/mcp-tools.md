@@ -96,7 +96,8 @@ Important request concepts:
 - `query` is required and must be non-empty
 - `mode` is optional and defaults to `auto`; allowed values are `auto`, `evidence`, and `answer`
 - the output schema is `repo_inspection_v2`
-- token constraints are `retrieval_token_budget`, `evidence_token_budget`, `final_pack_token_budget`, and `synthesis_context_token_budget`; an explicit inspection final-pack budget has a 2,048-token minimum
+- token constraints are `retrieval_token_budget`, `evidence_token_budget`, `final_pack_token_budget`, and `synthesis_context_token_budget`; an explicit inspection final-pack budget has a 2,048-token minimum for evidence mode and 4,096-token minimum for answer mode
+- `max_runtime_seconds` is an optional worker runtime limit capped at 24 hours; timed-out jobs report `timed_out` and a `runtime_limit` diagnostic
 
 ## Tool Summary
 

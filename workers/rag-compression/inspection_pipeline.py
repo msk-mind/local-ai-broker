@@ -293,7 +293,7 @@ def normalize_token_budgets(constraints):
         ),
         "synthesis_context_token_budget": _positive_int(
             constraints.get("synthesis_context_token_budget", constraints.get("remote_model_context_budget")),
-            24_000,
+            16_000,
             "synthesis_context_token_budget",
         ),
     }
@@ -2725,6 +2725,14 @@ def run_inspection(
         service_requester,
         failure_reporter,
     )
+    endpoint_context_limit = int((synthesis_endpoint or {}).get("context_limit_tokens") or 0)
+    configured_context_limit = int(budgets.get("synthesis_context_token_budget") or 0)
+    effective_context_limit = min(
+        value for value in (configured_context_limit, endpoint_context_limit) if value > 0
+    ) if configured_context_limit > 0 or endpoint_context_limit > 0 else 0
+    diagnostics["runtime"]["configured_synthesis_context_token_budget"] = configured_context_limit
+    diagnostics["runtime"]["endpoint_synthesis_context_limit_tokens"] = endpoint_context_limit
+    diagnostics["runtime"]["effective_synthesis_context_token_budget"] = effective_context_limit
     if synthesis is None:
         warnings.append("GPU_SYNTHESIS_EXHAUSTED")
         payload = terminal_payload("failed" if mode == "answer" else "evidence_only", "failed")

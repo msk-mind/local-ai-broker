@@ -195,7 +195,7 @@ def sha256_text(value: str) -> str:
 
 
 def estimate_tokens(value: str) -> int:
-    return max(1, len(value) // 4)
+    return max(1, (len(value) + 2) // 3)
 
 
 def semantic_chunk_signature(chunk) -> str:

@@ -39,6 +39,8 @@ type heartbeat struct {
 	Phase string `json:"phase"`
 }
 
+const runtimeTimeoutMarker = "runtime.timeout"
+
 func NewBackend(cfg config.Config) *Backend {
 	return &Backend{
 		mode: cfg.LocalMode,
@@ -120,6 +122,7 @@ func (b *Backend) SubmitRun(_ context.Context, job types.Job) (backends.SubmitRe
 		if err := os.WriteFile(filepath.Join(outputDir, "warm-request.marker"), []byte(filepath.Base(requestPath)), 0o644); err != nil {
 			return backends.SubmitResponse{}, fmt.Errorf("write warm request marker: %w", err)
 		}
+		b.startWarmRuntimeWatchdog(outputDir, job.Request.Constraints.MaxRuntimeSeconds)
 		return backends.SubmitResponse{
 			BackendKind:  b.Name(),
 			BackendRunID: runID,
@@ -154,9 +157,11 @@ func (b *Backend) SubmitRun(_ context.Context, job types.Job) (backends.SubmitRe
 		_ = stderrLog.Close()
 		return backends.SubmitResponse{}, fmt.Errorf("write pid file: %w", err)
 	}
+	stopWatchdog := b.startRuntimeWatchdog(outputDir, cmd.Process, job.Request.Constraints.MaxRuntimeSeconds)
 
 	go func(stdoutHandle, stderrHandle *os.File) {
 		_ = cmd.Wait()
+		stopWatchdog()
 		_ = stdoutHandle.Close()
 		_ = stderrHandle.Close()
 	}(stdoutLog, stderrLog)
@@ -201,6 +206,7 @@ func (b *Backend) SubmitWarmInspectRepoRun(_ context.Context, job types.Job, bun
 	if err := os.WriteFile(filepath.Join(outputDir, "warm-request.marker"), []byte(filepath.Base(requestPath)), 0o644); err != nil {
 		return backends.SubmitResponse{}, false, fmt.Errorf("write warm request marker: %w", err)
 	}
+	b.startWarmRuntimeWatchdog(outputDir, job.Request.Constraints.MaxRuntimeSeconds)
 	return backends.SubmitResponse{
 		BackendKind:  b.Name(),
 		BackendRunID: runID,
@@ -297,6 +303,17 @@ func (b *Backend) GetRun(_ context.Context, backendRunID string) (backends.RunSt
 	if _, err := os.Stat(filepath.Join(runDir, "result.json")); err == nil {
 		return localRunStatus(backendRunID, types.JobStateSucceeded, "COMPLETED"), nil
 	}
+	if _, err := os.Stat(filepath.Join(runDir, runtimeTimeoutMarker)); err == nil {
+		return backends.RunStatus{
+			BackendRunID: backendRunID,
+			State:        types.JobStateTimedOut,
+			RawState:     "TIMEOUT",
+			Diagnostics: map[string]any{
+				"backend_failure_category": "runtime_limit",
+				"runtime_timeout":          true,
+			},
+		}, nil
+	}
 	if hb, err := readHeartbeat(filepath.Join(runDir, "heartbeat.json")); err == nil {
 		if state, raw := mapHeartbeatState(hb.State); state != "" {
 			if state == types.JobStateRunning {
@@ -362,6 +379,50 @@ func (b *Backend) CancelRun(_ context.Context, backendRunID string) error {
 		return fmt.Errorf("terminate local worker pid %d: %w", pid, err)
 	}
 	return nil
+}
+
+func (b *Backend) startRuntimeWatchdog(outputDir string, process *os.Process, seconds int) func() {
+	if seconds <= 0 || process == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		timer := time.NewTimer(time.Duration(seconds) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-done:
+			return
+		case <-timer.C:
+			if _, err := os.Stat(filepath.Join(outputDir, "result.json")); err == nil {
+				return
+			}
+			_ = os.WriteFile(filepath.Join(outputDir, runtimeTimeoutMarker), []byte("runtime limit exceeded\n"), 0o600)
+			_ = process.Kill()
+		}
+	}()
+	return func() {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
+}
+
+func (b *Backend) startWarmRuntimeWatchdog(outputDir string, seconds int) {
+	if seconds <= 0 {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(time.Duration(seconds) * time.Second)
+		defer timer.Stop()
+		<-timer.C
+		if _, err := os.Stat(filepath.Join(outputDir, "result.json")); err == nil {
+			return
+		}
+		_ = os.WriteFile(filepath.Join(outputDir, runtimeTimeoutMarker), []byte("runtime limit exceeded\n"), 0o600)
+		_ = os.WriteFile(filepath.Join(outputDir, "cancel.request"), []byte("timeout\n"), 0o600)
+	}()
 }
 
 func (b *Backend) warmInspectRepoEnabled(job types.Job) bool {
@@ -686,6 +747,8 @@ func mapHeartbeatState(state string) (types.JobState, string) {
 		return types.JobStateFailed, "FAILED"
 	case "cancelled":
 		return types.JobStateCancelled, "CANCELLED"
+	case "timed_out", "timeout":
+		return types.JobStateTimedOut, "TIMEOUT"
 	default:
 		return "", ""
 	}

@@ -358,6 +358,21 @@ def release_warm_request_slot(output_dir, busy_marker_path):
     (output_dir / "warm-request.marker").unlink(missing_ok=True)
 
 
+def runtime_limit_reached(deadline, heartbeat_path, job_id, phase):
+    if deadline is None or time.monotonic() < deadline:
+        return False
+    emit_heartbeat(
+        heartbeat_path,
+        job_id,
+        "timed_out",
+        phase,
+        100,
+        "Worker runtime limit exceeded",
+        {"failure_category": "runtime_limit"},
+    )
+    return True
+
+
 def run_staged_job(
     job_spec_path,
     execution_plan_path,
@@ -404,10 +419,16 @@ def run_staged_job(
     after_import_validate = time.perf_counter()
 
     query, mode = validate_request(task_params.get("query"), task_params.get("mode", "auto"))
+    from inspection_contract import validate_constraints
+    validate_constraints(constraints, mode)
+    runtime_seconds = int(constraints.get("max_runtime_seconds") or 0)
+    runtime_deadline = time.monotonic() + runtime_seconds if runtime_seconds > 0 else None
     after_validate = time.perf_counter()
     discovered = discover_inputs(input_refs)
     after_discover = time.perf_counter()
     job_id = str(job_spec["job_id"])
+    if runtime_limit_reached(runtime_deadline, heartbeat_path, job_id, "discovering_inputs"):
+        return 0
 
     prepare_prefetched_state, cached_lexical_fallback_from_context = prefetch_helpers()
     after_import_prefetch = time.perf_counter()
@@ -422,6 +443,8 @@ def run_staged_job(
         output_dir=output_dir,
     )
     after_prefetch = time.perf_counter()
+    if runtime_limit_reached(runtime_deadline, heartbeat_path, job_id, "prefetching"):
+        return 0
     cached_run = prefetched_state.get("cached_lexical_fallback_run")
     if (
         cached_run is None
@@ -430,6 +453,8 @@ def run_staged_job(
     ):
         cached_run = cached_lexical_fallback_from_context(prefetched_state)
     after_cached_probe = time.perf_counter()
+    if runtime_limit_reached(runtime_deadline, heartbeat_path, job_id, "retrieving"):
+        return 0
     if cached_run is not None:
         payload = cached_run["payload"]
         annotate_runtime_mode(payload, daemon_mode=daemon_mode)
@@ -513,6 +538,8 @@ def run_staged_job(
         prefetched_state=prefetched_state,
     )
     after_run = time.perf_counter()
+    if runtime_limit_reached(runtime_deadline, heartbeat_path, job_id, "writing_artifacts"):
+        return 0
     payload = run["payload"]
     annotate_runtime_mode(payload, daemon_mode=daemon_mode)
     annotate_prefetch_runtime(payload, prefetched_state)

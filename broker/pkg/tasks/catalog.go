@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	MinInspectRepoFinalPackTokens = 2048
-	MaxInspectRepoQueryBytes      = 2048
+	MinInspectRepoFinalPackTokens  = 2048
+	MinInspectRepoAnswerPackTokens = 4096
+	MaxRuntimeSeconds              = 24 * 60 * 60
+	MaxInspectRepoQueryBytes       = 2048
 )
 
 type Spec struct {
@@ -217,6 +219,12 @@ func NormalizeTaskParams(taskParams map[string]any, payload map[string]any, task
 // and the generic job endpoint. Keeping this validation below the transport
 // layer prevents callers from bypassing inspect_repo's answer-quality contract.
 func ValidateSubmitRequest(req types.SubmitJobRequest) error {
+	if req.Constraints.MaxRuntimeSeconds < 0 {
+		return fmt.Errorf("max_runtime_seconds must be non-negative")
+	}
+	if req.Constraints.MaxRuntimeSeconds > MaxRuntimeSeconds {
+		return fmt.Errorf("max_runtime_seconds cannot exceed %d seconds", MaxRuntimeSeconds)
+	}
 	if req.TaskType != "inspect_repo" {
 		return nil
 	}
@@ -264,6 +272,9 @@ func ValidateSubmitRequest(req types.SubmitJobRequest) error {
 	}
 	if finalPackBudget > 0 && finalPackBudget < MinInspectRepoFinalPackTokens {
 		return fmt.Errorf("inspect_repo final_pack_token_budget must be at least %d tokens when set", MinInspectRepoFinalPackTokens)
+	}
+	if mode == "answer" && finalPackBudget > 0 && finalPackBudget < MinInspectRepoAnswerPackTokens {
+		return fmt.Errorf("inspect_repo answer mode final_pack_token_budget must be at least %d tokens when set", MinInspectRepoAnswerPackTokens)
 	}
 	return nil
 }

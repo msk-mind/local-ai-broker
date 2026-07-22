@@ -125,7 +125,7 @@ func (b *Backend) SubmitRun(ctx context.Context, job types.Job) (backends.Submit
 		return backends.StubSubmitResponse(b.Name(), b.nextStubRunID()), nil
 	}
 
-	args := b.baseSubmitArgs(job.Request.ExecutionProfile, "broker-"+job.TaskType)
+	args := b.baseSubmitArgs(job.Request.ExecutionProfile, "broker-"+job.TaskType, job.Request.Constraints.MaxRuntimeSeconds)
 	if dependencyArg := buildDependencyArg(job); dependencyArg != "" {
 		args = append(args, "--dependency", dependencyArg)
 	}
@@ -162,7 +162,13 @@ func (b *Backend) SubmitRunBatch(ctx context.Context, jobs []types.Job) ([]backe
 		return nil, fmt.Errorf("write array manifest: %w", err)
 	}
 
-	args := b.baseSubmitArgs(jobs[0].Request.ExecutionProfile, "broker-"+jobs[0].TaskType+"-batch")
+	maxRuntimeSeconds := 0
+	for _, job := range jobs {
+		if job.Request.Constraints.MaxRuntimeSeconds > maxRuntimeSeconds {
+			maxRuntimeSeconds = job.Request.Constraints.MaxRuntimeSeconds
+		}
+	}
+	args := b.baseSubmitArgs(jobs[0].Request.ExecutionProfile, "broker-"+jobs[0].TaskType+"-batch", maxRuntimeSeconds)
 	args = append(args, "--array", fmt.Sprintf("0-%d", len(jobs)-1))
 	args = append(args,
 		"--export", buildBatchExport(jobs[0], manifestPath),
@@ -194,7 +200,7 @@ func (b *Backend) stubBatchResponses(jobCount int) []backends.SubmitResponse {
 	})
 }
 
-func (b *Backend) baseSubmitArgs(profile types.ExecutionProfile, jobName string) []string {
+func (b *Backend) baseSubmitArgs(profile types.ExecutionProfile, jobName string, maxRuntimeSeconds int) []string {
 	args := []string{
 		"--parsable",
 		"--job-name", jobName,
@@ -212,10 +218,23 @@ func (b *Backend) baseSubmitArgs(profile types.ExecutionProfile, jobName string)
 		args = append(args, "--nodelist", nodelist)
 	}
 	args = append(args, singleWorkerSchedulingArgs()...)
+	if maxRuntimeSeconds > 0 {
+		args = append(args, "--time", formatSlurmTimeLimit(maxRuntimeSeconds))
+	}
 	if constraint := strings.TrimSpace(selectConstraint(profile, b.cfg)); constraint != "" {
 		args = append(args, "--constraint", constraint)
 	}
 	return args
+}
+
+func formatSlurmTimeLimit(seconds int) string {
+	if seconds <= 0 {
+		return ""
+	}
+	hours := seconds / 3600
+	minutes := (seconds % 3600) / 60
+	remaining := seconds % 60
+	return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, remaining)
 }
 
 func (b *Backend) GetRun(ctx context.Context, backendRunID string) (backends.RunStatus, error) {

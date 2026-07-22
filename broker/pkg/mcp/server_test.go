@@ -420,6 +420,10 @@ func TestInspectRepoToolPublishesV2Contract(t *testing.T) {
 	if finalPack["minimum"] != tasks.MinInspectRepoFinalPackTokens {
 		t.Fatalf("unexpected inspect_repo final pack minimum: %#v", finalPack)
 	}
+	maxRuntime := constraints["max_runtime_seconds"].(map[string]any)
+	if maxRuntime["maximum"] != tasks.MaxRuntimeSeconds {
+		t.Fatalf("unexpected inspect_repo runtime maximum: %#v", maxRuntime)
+	}
 	profile := properties["execution_profile"].(map[string]any)["properties"].(map[string]any)
 	tiers := profile["tier"].(map[string]any)["enum"].([]string)
 	for _, tier := range []string{"p40-retrieval", "p40-synthesis", "v100-reasoning", "a100-single", "a100-multigpu"} {

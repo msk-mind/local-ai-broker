@@ -171,13 +171,14 @@ func (s *Service) executionBundle(ctx context.Context, job *types.Job) (backends
 	job.Request.InputRefs = resolvedInputRefs
 
 	executionPlan := map[string]any{
-		"job_id":             job.ID,
-		"task_type":          job.TaskType,
-		"execution_profile":  job.Request.ExecutionProfile,
-		"selected_model":     job.Request.ExecutionProfile.Model,
-		"runtime_backend":    job.Request.ExecutionProfile.Runtime,
-		"resource_tier":      job.Request.ExecutionProfile.Tier,
-		"runtime_connection": s.runtimeConnectionPlan(job.Request.ExecutionProfile),
+		"job_id":              job.ID,
+		"task_type":           job.TaskType,
+		"execution_profile":   job.Request.ExecutionProfile,
+		"selected_model":      job.Request.ExecutionProfile.Model,
+		"runtime_backend":     job.Request.ExecutionProfile.Runtime,
+		"resource_tier":       job.Request.ExecutionProfile.Tier,
+		"runtime_connection":  s.runtimeConnectionPlan(job.Request.ExecutionProfile),
+		"max_runtime_seconds": job.Request.Constraints.MaxRuntimeSeconds,
 	}
 	if job.TaskType == "inspect_repo" && s.gpuServices.Enabled {
 		executionPlan["gpu_service_registry_path"] = s.gpuServices.RegistryPath

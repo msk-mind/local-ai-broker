@@ -852,7 +852,7 @@ func ragConstraintsSchema() map[string]any {
 			"evidence_token_budget":          map[string]any{"type": "integer", "minimum": 1},
 			"final_pack_token_budget":        map[string]any{"type": "integer", "minimum": 1},
 			"synthesis_context_token_budget": map[string]any{"type": "integer", "minimum": 1},
-			"max_runtime_seconds":            map[string]any{"type": "integer"},
+			"max_runtime_seconds":            map[string]any{"type": "integer", "minimum": 0, "maximum": tasks.MaxRuntimeSeconds},
 			"confidentiality":                map[string]any{"type": "string"},
 		},
 	}

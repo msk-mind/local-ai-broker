@@ -160,7 +160,7 @@ Expected payload shape:
 
 ### `repo_inspection_v2`
 
-`inspect_repo` requires a non-empty query of at most 2,048 UTF-8 bytes. An explicitly set `final_pack_token_budget` must be at least 2,048 tokens. `mode` is `auto` (default),
+`inspect_repo` requires a non-empty query of at most 2,048 UTF-8 bytes. An explicitly set `final_pack_token_budget` must be at least 2,048 tokens for evidence mode and 4,096 tokens for answer mode. `max_runtime_seconds`, when non-zero, must be between 1 second and 24 hours. `mode` is `auto` (default),
 `evidence`, or `answer`. The schema version is `2.0.0` and the payload contains:
 
 - `mode`

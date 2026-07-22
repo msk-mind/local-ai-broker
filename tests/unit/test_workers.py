@@ -26,6 +26,7 @@ log_analysis = load_module("log_analysis_worker", "workers/log-analysis/main.py"
 rag_compression = load_module("rag_compression_worker", "workers/rag-compression/main.py")
 repo_summary = load_module("repo_summary_worker", "workers/repo-summary/main.py")
 inspect_repo_worker = load_module("inspect_repo_worker", "workers/rag-compression/inspect_repo_worker.py")
+inspection_contract = load_module("inspection_contract", "workers/rag-compression/inspection_contract.py")
 
 
 class DocumentSummaryWorkerTests(unittest.TestCase):
@@ -117,6 +118,15 @@ class RAGCompressionWorkerTests(unittest.TestCase):
     def test_inspect_repo_rejects_unknown_mode(self):
         with self.assertRaisesRegex(ValueError, "auto, evidence, answer"):
             rag_compression.validate_request("find the call chain", "fast")
+
+    def test_inspect_repo_budget_contract_is_mode_aware(self):
+        inspection_contract.validate_constraints({"final_pack_token_budget": 2048}, "evidence")
+        with self.assertRaisesRegex(ValueError, "at least 4096"):
+            inspection_contract.validate_constraints({"final_pack_token_budget": 2048}, "answer")
+
+    def test_inspect_repo_runtime_limit_is_bounded(self):
+        with self.assertRaisesRegex(ValueError, "between 0 and"):
+            inspection_contract.validate_constraints({"max_runtime_seconds": 24 * 60 * 60 + 1}, "evidence")
 
     def test_deterministic_runtime_is_never_promoted_to_real(self):
         adapter = rag_compression.build_runtime_adapter({})

@@ -2998,6 +2998,9 @@ func TestGetJobAppliesBrokerRetrievalPolicyWarnings(t *testing.T) {
 	if got.ResultError != "broker_policy_no_real_retrieval_backend" {
 		t.Fatalf("expected broker policy result error, got %#v", got.ResultError)
 	}
+	if !got.DegradedLocalExecution || got.ExecutionQuality != "no_real_backend" {
+		t.Fatalf("expected policy degradation to propagate to job quality, got %#v", got)
+	}
 	retryRecommendation, _ := got.Result.Payload["broker_retry_recommendation"].(map[string]any)
 	if retryRecommendation["recommended"] != true {
 		t.Fatalf("expected broker retry recommendation, got %#v", got.Result.Payload)
@@ -3137,6 +3140,24 @@ func TestGPUBackedRepoInspectionEvidenceModeIsNotDegraded(t *testing.T) {
 	}
 	if isDegradedResult(job.TaskType, result, nil) {
 		t.Fatal("GPU-backed evidence mode must not be marked as degraded local execution")
+	}
+}
+
+func TestRepoInspectionPolicyWarningRemainsDegradedEvenWhenAnswerReady(t *testing.T) {
+	job := types.Job{TaskType: "inspect_repo"}
+	result := types.Result{
+		SchemaName: "repo_inspection_v2",
+		Payload: map[string]any{
+			"mode": "answer",
+			"quality": map[string]any{
+				"result": "answer_ready", "retrieval": "gpu", "reranking": "gpu",
+				"synthesis": "gpu", "answer_ready": true,
+			},
+			"warnings": []any{"IGNORED_PATH_RETRIEVAL_CONTAMINATION"},
+		},
+	}
+	if !isDegradedResult(job.TaskType, result, nil) {
+		t.Fatal("policy warnings must keep contaminated repo results degraded")
 	}
 }
 

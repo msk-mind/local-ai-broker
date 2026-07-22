@@ -201,6 +201,9 @@ func isDegradedResult(taskType string, result types.Result, diagnostics map[stri
 		if stringValue(quality["result"]) == "failed" {
 			return true
 		}
+		if hasDegradedRetrievalPolicy(result.Payload) {
+			return true
+		}
 		// Evidence mode intentionally stops before synthesis. A GPU-backed
 		// evidence pack is authoritative evidence, not degraded execution.
 		if stringValue(result.Payload["mode"]) == "evidence" {
@@ -208,7 +211,26 @@ func isDegradedResult(taskType string, result types.Result, diagnostics map[stri
 		}
 		return stringValue(quality["result"]) != "answer_ready"
 	}
+	if hasDegradedRetrievalPolicy(result.Payload) {
+		return true
+	}
 	return isDegradedLocalExecution(diagnostics)
+}
+
+func hasDegradedRetrievalPolicy(payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	for _, raw := range []any{payload["warnings"], mapValue(payload["policy_signals"])["warnings"]} {
+		for _, warning := range collectStringSlice(raw) {
+			switch warning {
+			case "LOCAL_RETRIEVAL_DEGRADED", "NO_REAL_RETRIEVAL_BACKEND", "IGNORED_PATH_RETRIEVAL_CONTAMINATION",
+				"broker_local_retrieval_degraded", "broker_no_real_retrieval_backend", "broker_ignored_path_retrieval_contamination":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hasRetryRecommendation(job types.Job) bool {
@@ -242,6 +264,12 @@ func deriveResultExecutionQuality(taskType string, result types.Result, diagnost
 		default:
 			return "failed"
 		}
+	}
+	if hasDegradedRetrievalPolicy(result.Payload) {
+		if retryRecommended {
+			return "no_real_backend"
+		}
+		return "degraded_local"
 	}
 	return deriveExecutionQuality(diagnostics, retryRecommended)
 }

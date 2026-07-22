@@ -38,6 +38,14 @@ Default flow:
 
 The main token-reduction path is `rag_compress`: retrieve locally, compress locally, release a bounded evidence pack.
 
+### Runtime orchestration
+
+Inspection requests are handled as explicit internal stages: setup, repository and cache preparation, retrieval and reranking, synthesis, and result/artifact finalization. Stage boundaries keep cache reuse and diagnostics visible without changing the public result contract.
+
+The standalone document, log-analysis, and repository-summary workers share the common JSON and heartbeat runtime in `workers/worker_runtime.py`. The RAG worker keeps its atomic output writer because its cache and artifact files have stronger write guarantees.
+
+When GPU services are enabled, retrieval and reranking use the P40 retrieval tier. Synthesis can escalate through P40, V100, and either single-GPU or multi-GPU A100 capacity when the response requires more context or recovery from a failed attempt. If GPU retrieval is unavailable, the broker can return explicitly marked lexical evidence rather than presenting degraded results as authoritative answers.
+
 ## Quick Start
 
 Fastest local path:
@@ -143,6 +151,19 @@ Typical result shape:
 ```
 
 See [docs/mcp-tools.md](docs/mcp-tools.md) for the MCP and HTTP job lifecycle.
+
+## Development Checks
+
+Run focused worker and service tests during local changes:
+
+```bash
+python -m pytest -q tests/unit/test_workers.py tests/unit/test_service_control.py
+CGO_ENABLED=0 go test ./broker/pkg/gpuservice ./broker/pkg/mcp ./broker/pkg/service
+python -m py_compile workers/worker_runtime.py workers/rag-compression/main.py
+git diff --check
+```
+
+The full reliability suite is available with `bash scripts/test_reliability.sh`. Inspection cache/index tests exercise repository-state reuse separately because they depend on isolated temporary cache directories and filesystem state.
 
 ## Approximate Token Savings
 

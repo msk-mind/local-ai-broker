@@ -76,6 +76,31 @@ The request worker never starts a model. The reconciler submits and replaces ser
 
 Warm retrieval checks an index fingerprint before search. Repository text is uploaded to the P40 in bounded batches only when that fingerprint is absent; subsequent queries send the fingerprint and query, not the entire corpus.
 
+## GPU Service Tradeoffs
+
+The GPU service model keeps model servers warm and exposes them through leases in the broker registry. It is most useful when requests are frequent enough to amortize service startup and when several workers should share the same model endpoint.
+
+Advantages:
+
+- Lower repeated-request latency: warm P40 services avoid starting a model for every job.
+- Better GPU utilization: multiple requests can share an embedding, retrieval, reranking, or synthesis service.
+- More predictable routing: the broker sends work only to healthy, unexpired leases and records tier, GPU count, job ID, and failure category.
+- Smaller request payloads after cache warmup: retrieval sends an index fingerprint and query instead of re-uploading the full repository.
+- Controlled escalation: normal work stays on P40 capacity, while V100/A100 resources are reserved for recorded failures or stronger synthesis requirements.
+- Safer separation of concerns: request workers handle orchestration and evidence preparation; model services handle inference and can be restarted independently.
+
+Costs and limitations:
+
+- Operational complexity: the deployment needs Slurm, a reconciler, registry and control-spool permissions, service health checks, and compatible runtime endpoints.
+- Startup and queue delays: scale-from-zero V100/A100 services can take substantially longer than a warm P40, especially when the cluster is busy.
+- Resource reservation: minimum P40 replicas consume GPU capacity while idle; scale-to-zero tiers trade idle cost for cold-start latency.
+- More failure modes: stale leases, expired heartbeats, scheduler priority, endpoint incompatibility, and service startup failures all need monitoring and recovery.
+- Shared-state management: registry, index-cache, run-root, and audit-log storage must be durable and visible to the processes that use them.
+- Model/runtime coupling: each configured profile must match its runtime API, context limit, quantization, GPU count, and tensor-parallel settings.
+- Degraded fallback is not equivalent to inference: when GPU retrieval is unavailable, the broker can return lexical evidence-only output, but it should not be treated as a model-backed answer.
+
+Use the service model when warm latency, shared GPU utilization, and tiered escalation matter. Use local command mode when validating behavior, running infrequent jobs, or minimizing deployment dependencies; use direct worker execution for focused diagnostics and benchmarks. The GPU service does not remove the need to monitor queue delay, lease health, cache hit rate, and degraded-result rates.
+
 ## Configuration Priorities
 
 The most important settings are:

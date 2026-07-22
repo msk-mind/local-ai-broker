@@ -2628,13 +2628,24 @@ def run_inspection(
         diagnostics["retrieval"]["selected_evidence"] = len(result["evidence"])
         return result
 
-    if mode == "evidence":
-        payload = terminal_payload("evidence_only", "not_requested")
+    def finalize_payload(payload):
         stage_started = time.perf_counter()
         artifacts = _artifact_payloads(
-            payload, fingerprint, chunks, selected, index_path, lexical_cache_hit, bool(task_params.get("include_full_trace"))
+            payload,
+            fingerprint,
+            chunks,
+            selected,
+            index_path,
+            lexical_cache_hit,
+            bool(task_params.get("include_full_trace")),
         )
         tail_stage_timings["artifact_payloads_ms"] = _elapsed_ms(stage_started)
+        return {"payload": payload, "artifact_payloads": artifacts}
+
+    if mode == "evidence":
+        payload = terminal_payload("evidence_only", "not_requested")
+        finalized = finalize_payload(payload)
+        artifacts = finalized["artifact_payloads"]
         if query_stage_cache_key is not None:
             _write_query_stage_cache(
                 cache_dir,
@@ -2658,7 +2669,7 @@ def run_inspection(
                 chunk_count=int(getattr(chunks, "_chunk_count", 0) or len(getattr(chunks, "_chunk_ids", ()) or ()) or len(chunks or [])),
                 budgets=budgets,
             )
-        return {"payload": payload, "artifact_payloads": artifacts}
+        return finalized
 
     if retrieval_quality != "gpu" or rerank_quality != "gpu" or not evidence:
         warnings.append("ANSWER_REQUIRES_GPU_RETRIEVAL_AND_RERANK")
@@ -2670,11 +2681,8 @@ def run_inspection(
         result_state = "evidence_only" if has_fallback_evidence else "failed"
         synthesis_state = "not_requested" if has_fallback_evidence else "failed"
         payload = terminal_payload(result_state, synthesis_state)
-        stage_started = time.perf_counter()
-        artifacts = _artifact_payloads(
-            payload, fingerprint, chunks, selected, index_path, lexical_cache_hit, bool(task_params.get("include_full_trace"))
-        )
-        tail_stage_timings["artifact_payloads_ms"] = _elapsed_ms(stage_started)
+        finalized = finalize_payload(payload)
+        artifacts = finalized["artifact_payloads"]
         if query_stage_cache_key is not None and has_fallback_evidence:
             _write_query_stage_cache(
                 cache_dir,
@@ -2698,7 +2706,7 @@ def run_inspection(
                 chunk_count=int(getattr(chunks, "_chunk_count", 0) or len(getattr(chunks, "_chunk_ids", ()) or ()) or len(chunks or [])),
                 budgets=budgets,
             )
-        return {"payload": payload, "artifact_payloads": artifacts}
+        return finalized
 
     synthesis_budgets = dict(budgets)
     synthesis_base = {
@@ -2736,10 +2744,7 @@ def run_inspection(
     if synthesis is None:
         warnings.append("GPU_SYNTHESIS_EXHAUSTED")
         payload = terminal_payload("failed" if mode == "answer" else "evidence_only", "failed")
-        artifacts = _artifact_payloads(
-            payload, fingerprint, chunks, selected, index_path, lexical_cache_hit, bool(task_params.get("include_full_trace"))
-        )
-        return {"payload": payload, "artifact_payloads": artifacts}
+        return finalize_payload(payload)
 
     provenance.update(
         {
@@ -2787,9 +2792,4 @@ def run_inspection(
             chunk_count=int(getattr(chunks, "_chunk_count", 0) or len(getattr(chunks, "_chunk_ids", ()) or ()) or len(chunks or [])),
             budgets=budgets,
         )
-    stage_started = time.perf_counter()
-    artifacts = _artifact_payloads(
-        payload, fingerprint, chunks, selected, index_path, lexical_cache_hit, bool(task_params.get("include_full_trace"))
-    )
-    tail_stage_timings["artifact_payloads_ms"] = _elapsed_ms(stage_started)
-    return {"payload": payload, "artifact_payloads": artifacts}
+    return finalize_payload(payload)

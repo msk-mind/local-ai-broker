@@ -306,7 +306,7 @@ def request_service(execution_plan, tier, failure_category, reason):
         response_path.unlink(missing_ok=True)
 
 
-def requester_from_execution_plan(execution_plan):
+def _protected_execution_plan(execution_plan):
     execution_plan = execution_plan or {}
     request_path = execution_plan.get("gpu_service_request_path") or os.environ.get(
         "BROKER_GPU_SERVICE_CONTROL_REQUEST_DIR"
@@ -319,6 +319,13 @@ def requester_from_execution_plan(execution_plan):
     protected_plan = dict(execution_plan)
     protected_plan["gpu_service_request_path"] = request_path
     protected_plan["gpu_service_control_token"] = control_token
+    return protected_plan
+
+
+def requester_from_execution_plan(execution_plan):
+    protected_plan = _protected_execution_plan(execution_plan)
+    if protected_plan is None:
+        return None
 
     def requester(tier, failure_category, reason):
         return request_service(protected_plan, tier, failure_category, reason)
@@ -327,18 +334,9 @@ def requester_from_execution_plan(execution_plan):
 
 
 def failure_reporter_from_execution_plan(execution_plan):
-    execution_plan = execution_plan or {}
-    request_path = execution_plan.get("gpu_service_request_path") or os.environ.get(
-        "BROKER_GPU_SERVICE_CONTROL_REQUEST_DIR"
-    )
-    control_token = execution_plan.get("gpu_service_control_token") or os.environ.get(
-        "BROKER_GPU_SERVICE_CONTROL_TOKEN"
-    )
-    if not request_path or not control_token:
+    protected_plan = _protected_execution_plan(execution_plan)
+    if protected_plan is None:
         return None
-    protected_plan = dict(execution_plan)
-    protected_plan["gpu_service_request_path"] = request_path
-    protected_plan["gpu_service_control_token"] = control_token
 
     def reporter(service, failure_category, reason):
         return report_p40_service_failure(protected_plan, service, failure_category, reason)

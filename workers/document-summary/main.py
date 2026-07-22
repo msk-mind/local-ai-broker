@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
-import json
-from datetime import datetime, timezone
 from pathlib import Path
+import sys
 from urllib.parse import urlparse, unquote
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from worker_runtime import emit_heartbeat, load_json, write_json
 
 
 def main():
@@ -75,31 +77,6 @@ def main():
         "word_count": len(words),
     })
     return 0
-
-
-def load_json(path: Path):
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def write_json(path, payload):
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
-
-
-def emit_heartbeat(path, job_id, state, phase, percent, message, metrics):
-    if path is None:
-        return
-    payload = {
-        "job_id": job_id,
-        "state": state,
-        "phase": phase,
-        "percent": percent,
-        "message": message,
-        "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-        "metrics": metrics,
-    }
-    write_json(path, payload)
 
 
 def resolve_file_uri(uri):

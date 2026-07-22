@@ -170,6 +170,33 @@ The configured retrieval runtime must expose authenticated `/health`, `/v1/embed
 
 Legacy `BROKER_MODEL_PROFILE_P40` and `BROKER_MODEL_PROFILE_A100` have empty defaults. They do not supply model artifacts for these service profiles.
 
+### Choosing Models By Role
+
+Choose a model for the service role and workload, not only by GPU name. The broker treats the configured profile as an operational contract: the model, runtime, quantization, context limit, GPU count, and supported API operations must agree.
+
+| Tier | Model role | Choose it when | Main tradeoff |
+| --- | --- | --- | --- |
+| `p40-retrieval` | Embeddings, semantic search, and reranking | You need shared, warm retrieval for repeated repository or document queries | Optimize for embedding quality, batch throughput, and memory footprint; this is not the answer-generation model |
+| `p40-synthesis` | Normal evidence synthesis | The retrieved evidence fits the configured context and ordinary latency is preferred | Lowest-cost synthesis tier, but less headroom for difficult reasoning or large contexts |
+| `v100-reasoning` | First stronger synthesis fallback, four GPUs on one node | P40 synthesis fails, times out, or cannot produce a valid result and the request needs more reasoning capacity | Four-GPU placement increases queue time and cost; the model must support tensor parallelism through `{gpu_count}` |
+| `a100-single` | Stronger single-GPU synthesis fallback | V100 is unavailable, delayed, or fails for an availability-related reason | Faster to place than a multi-GPU fallback when capacity exists, but has less context and parallel capacity than the four-GPU option |
+| `a100-multigpu` | Maximum configured synthesis capacity, four GPUs on one node | The failure indicates OOM, context overflow, model limits, or repeated invalid synthesis that needs more capacity | Highest placement cost and queue sensitivity; requires a compatible four-GPU model/runtime configuration |
+
+For retrieval, benchmark recall and reranking quality on representative corpora before optimizing raw latency. A fast embedding model that produces poor candidates increases synthesis cost and may reduce answer quality. For synthesis, compare supported context length, instruction following, structured-output validity, latency, and memory use; do not select a model solely because it fits on the GPU.
+
+The normal escalation policy is part of model selection. Keep the P40 synthesis model as the default, configure a materially stronger and distinct V100 model for the first fallback, and reserve A100 profiles for the recorded failure categories described below. Availability or queue failures select `a100-single`; capacity, context, or repeated invalid-synthesis failures select `a100-multigpu`. The broker records each attempt and does not skip directly to A100.
+
+Before enabling a model, verify:
+
+- the runtime implements the required health and inference endpoints;
+- the configured context limit matches the actual model/runtime limit;
+- quantization and tensor-parallel arguments are accepted by the runtime;
+- the model artifact and profile are readable from the Slurm node;
+- cold-start, warm-request, timeout, and structured-output behavior are measured;
+- retrieval models are tested on citation and recall fixtures, while synthesis models are tested on validation and escalation fixtures.
+
+The remote caller may still use its own reasoning model after receiving the broker’s compact structured result. The local service model is responsible for retrieval, reranking, compression, or synthesis near the data; it does not replace the remote model unless the selected local synthesis tier produces an answer-ready result.
+
 ### Registry Records
 
 Each service publishes:

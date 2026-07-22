@@ -36,6 +36,13 @@ func main() {
 	if err != nil {
 		logger.Fatalf("initialize backend: %v", err)
 	}
+	if localBackend, ok := backend.(*local.Backend); ok {
+		if pid, started, err := localBackend.StartInspectRepoWarmDaemon(); err != nil {
+			logger.Fatalf("initialize local inspect_repo warm daemon: %v", err)
+		} else if started {
+			logger.Printf("local inspect_repo warm daemon ready pid=%d", pid)
+		}
+	}
 	auditLogger := audit.NewFileLogger(cfg.AuditLogPath)
 	svc := service.NewWithAuditAndOptionsAndConfig(jobStore, backend, logger, auditLogger, cfg.RunRootPath, cfg.RepoRootPath, service.Options{
 		ParallelMaxBatchSize:           cfg.ParallelMaxBatchSize,
@@ -43,6 +50,15 @@ func main() {
 		RootActionMaxAdditionalBatches: cfg.RootActionMaxAdditionalBatches,
 		RootActionMaxRetriedShards:     cfg.RootActionMaxRetriedShards,
 	}, &cfg)
+	gpuContext, stopGPUControlPlane := context.WithCancel(context.Background())
+	defer stopGPUControlPlane()
+	gpuManager, err := common.StartGPUServiceControlPlane(gpuContext, cfg, backend, logger)
+	if err != nil {
+		logger.Fatalf("initialize GPU service control plane: %v", err)
+	}
+	if cfg.InspectRepoPrewarmEnabled {
+		svc.StartInspectRepoPrewarm(context.Background(), logger, cfg.InspectRepoPrewarmURI, cfg.InspectRepoPrewarmQuery)
+	}
 	authenticator, err := buildAuthenticator(cfg)
 	if err != nil {
 		logger.Fatalf("initialize authenticator: %v", err)
@@ -75,6 +91,15 @@ func main() {
 			logger.Fatalf("server failed: %v", err)
 		}
 		return
+	}
+
+	stopGPUControlPlane()
+	if gpuManager != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := gpuManager.Shutdown(cleanupCtx); err != nil {
+			logger.Printf("GPU service shutdown cleanup failed: %v", err)
+		}
+		cleanupCancel()
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

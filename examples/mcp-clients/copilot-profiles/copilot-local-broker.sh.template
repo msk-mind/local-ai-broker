@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# copilot-local-broker: launches Copilot CLI with the local broker MCP server active.
+# Equivalent to: copilot --additional-mcp-config @~/.copilot/profiles/local-broker.mcp-config.json
+set -euo pipefail
+exec "__COPILOT_BIN__" --allow-all-mcp-server-instructions --additional-mcp-config "@${HOME}/.copilot/profiles/local-broker.mcp-config.json" "$@"

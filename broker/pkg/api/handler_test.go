@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,87 @@ import (
 	"github.com/msk-mind/local-ai-broker/broker/pkg/store"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/types"
 )
+
+type apiWaitBackend struct {
+	runRoot  string
+	delay    time.Duration
+	complete map[string]bool
+	mu       sync.Mutex
+	waiters  map[string]chan struct{}
+}
+
+func (b *apiWaitBackend) Name() string { return "local" }
+
+func (b *apiWaitBackend) SubmitRun(_ context.Context, job types.Job) (backends.SubmitResponse, error) {
+	b.mu.Lock()
+	if b.complete == nil {
+		b.complete = map[string]bool{}
+	}
+	if b.waiters == nil {
+		b.waiters = map[string]chan struct{}{}
+	}
+	b.complete[job.ID] = false
+	waiter := make(chan struct{})
+	b.waiters[job.ID] = waiter
+	b.mu.Unlock()
+	go func() {
+		time.Sleep(b.delay)
+		jobDir := filepath.Join(b.runRoot, job.ID)
+		_ = os.MkdirAll(jobDir, 0o755)
+		_ = os.WriteFile(filepath.Join(jobDir, "result.json"), []byte(`{
+  "schema_name": "repo_inspection_v2",
+  "schema_version": "2.0.0",
+  "payload": {
+    "mode": "evidence",
+    "query": "trace retry_job",
+    "findings": [],
+    "evidence": [{"id":"ev_001","source_refs":[{"path":"broker/pkg/api/handler.go","line_start":1,"line_end":5}]}],
+    "quality": {"result":"evidence_only","retrieval":"lexical_degraded","reranking":"unavailable","synthesis":"not_requested","answer_ready":false},
+    "warnings": [],
+    "provenance": {"index_fingerprint":"sha256:test"},
+    "retrieval": {},
+    "runtime": {"attempts":[]}
+  }
+}`), 0o644)
+		_ = os.WriteFile(filepath.Join(jobDir, "artifacts.json"), []byte(`[]`), 0o644)
+		close(waiter)
+		time.Sleep(150 * time.Millisecond)
+		b.mu.Lock()
+		b.complete[job.ID] = true
+		b.mu.Unlock()
+	}()
+	return backends.SubmitResponse{BackendKind: "local", BackendRunID: job.ID, InitialState: types.JobStateQueued}, nil
+}
+
+func (b *apiWaitBackend) GetRun(_ context.Context, backendRunID string) (backends.RunStatus, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.complete[backendRunID] {
+		return backends.RunStatus{State: types.JobStateSucceeded, RawState: "COMPLETED"}, nil
+	}
+	return backends.RunStatus{State: types.JobStateQueued, RawState: "PENDING"}, nil
+}
+
+func (*apiWaitBackend) CancelRun(context.Context, string) error { return nil }
+
+func (b *apiWaitBackend) AwaitLocalInspectRepoResult(ctx context.Context, backendRunID string, waitWindow time.Duration) bool {
+	b.mu.Lock()
+	waiter := b.waiters[backendRunID]
+	b.mu.Unlock()
+	if waiter == nil || waitWindow <= 0 {
+		return false
+	}
+	timer := time.NewTimer(waitWindow)
+	defer timer.Stop()
+	select {
+	case <-waiter:
+		return true
+	case <-timer.C:
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
 
 const (
 	httpRetryBudgetExceededMessage   = "cumulative retried_shards=2 would exceed non-admin limit 1"
@@ -299,10 +381,11 @@ func TestRAGIndexMetadataEndpoint(t *testing.T) {
 		SubmittedBy: "alice",
 		Request: types.SubmitJobRequest{
 			TaskType:     "inspect_repo",
-			OutputSchema: types.OutputSchemaRef{Name: "repo_inspection_pack_v1"},
+			TaskParams:   map[string]any{"include_full_trace": true},
+			OutputSchema: types.OutputSchemaRef{Name: "repo_inspection_v2"},
 		},
 		Result: &types.Result{
-			SchemaName:    "repo_inspection_pack_v1",
+			SchemaName:    "repo_inspection_v2",
 			SchemaVersion: "1.0.0",
 			Payload:       map[string]any{"query": "inspect", "evidence": []any{}},
 		},
@@ -418,6 +501,116 @@ func TestListJobs(t *testing.T) {
 
 	if listRec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d: %s", http.StatusOK, listRec.Code, listRec.Body.String())
+	}
+}
+
+func TestFetchResultWaitsForDirectReleasedResultWhenRequested(t *testing.T) {
+	runRoot := t.TempDir()
+	jobStore := store.NewMemoryJobStore()
+	svc := service.New(
+		jobStore,
+		&apiWaitBackend{runRoot: runRoot, delay: 20 * time.Millisecond},
+		log.New(io.Discard, "", 0),
+		runRoot,
+		".",
+	)
+	handler := NewHandler(svc, auth.NewHeaderAuthenticator())
+
+	body := mustJSON(t, types.SubmitJobRequest{
+		TaskType: "inspect_repo",
+		InputRefs: []types.InputRef{
+			{Type: "repo", URI: "file:///tmp/repo"},
+		},
+		TaskParams:   map[string]any{"query": "trace retry_job", "mode": "evidence"},
+		OutputSchema: types.OutputSchemaRef{Name: "repo_inspection_v2"},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", bytes.NewReader(body))
+	setBrokerIdentity(req, "alice", "user")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("submit expected %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
+	}
+	var submitResp types.SubmitJobResponse
+	if err := json.NewDecoder(rec.Body).Decode(&submitResp); err != nil {
+		t.Fatalf("decode submit: %v", err)
+	}
+
+	waitReq := httptest.NewRequest(http.MethodGet, "/v1/jobs/"+submitResp.JobID+"/result?wait_ms=500&poll_interval_ms=10", nil)
+	setBrokerIdentity(waitReq, "alice", "user")
+	waitRec := httptest.NewRecorder()
+	handler.ServeHTTP(waitRec, waitReq)
+	if waitRec.Code != http.StatusOK {
+		t.Fatalf("wait expected %d, got %d: %s", http.StatusOK, waitRec.Code, waitRec.Body.String())
+	}
+	var release types.JobResultRelease
+	if err := json.NewDecoder(waitRec.Body).Decode(&release); err != nil {
+		t.Fatalf("decode release: %v", err)
+	}
+	if release.Result == nil || release.Result.SchemaName != "repo_inspection_v2" {
+		t.Fatalf("expected released result, got %#v", release)
+	}
+	runtime, _ := release.Result.Payload["runtime"].(map[string]any)
+	lifecycle, _ := runtime["broker_lifecycle"].(map[string]any)
+	if lifecycle["broker_result_request_started_unix_ns"] == nil || lifecycle["broker_result_response_ready_unix_ns"] == nil {
+		t.Fatalf("expected broker result lifecycle timings, got %#v", lifecycle)
+	}
+	if got, _ := lifecycle["broker_result_poll_count"].(float64); got != 0 {
+		t.Fatalf("expected initial waited fetch to avoid result polling, got %#v", lifecycle["broker_result_poll_count"])
+	}
+}
+
+func TestReleasedResultWaitPollIntervalCapsCoarsePolling(t *testing.T) {
+	if got := releasedResultWaitPollInterval(0); got != maximumReleasedResultWaitPollInterval {
+		t.Fatalf("default interval = %s, want %s", got, maximumReleasedResultWaitPollInterval)
+	}
+	if got := releasedResultWaitPollInterval(1); got != minimumReleasedResultWaitPollInterval {
+		t.Fatalf("minimum interval = %s, want %s", got, minimumReleasedResultWaitPollInterval)
+	}
+	if got := releasedResultWaitPollInterval(10); got != maximumReleasedResultWaitPollInterval {
+		t.Fatalf("capped interval = %s, want %s", got, maximumReleasedResultWaitPollInterval)
+	}
+	if got := releasedResultWaitPollInterval(3); got != 3*time.Millisecond {
+		t.Fatalf("preserved interval = %s, want %s", got, 3*time.Millisecond)
+	}
+}
+
+func TestSubmitJobReturnsInlineReleasedResultBeforeTerminalState(t *testing.T) {
+	runRoot := t.TempDir()
+	jobStore := store.NewMemoryJobStore()
+	svc := service.New(
+		jobStore,
+		&apiWaitBackend{runRoot: runRoot, delay: 20 * time.Millisecond},
+		log.New(io.Discard, "", 0),
+		runRoot,
+		".",
+	)
+	handler := NewHandler(svc, auth.NewHeaderAuthenticator())
+
+	body := mustJSON(t, types.SubmitJobRequest{
+		TaskType: "inspect_repo",
+		InputRefs: []types.InputRef{
+			{Type: "repo", URI: "file:///tmp/repo"},
+		},
+		TaskParams:   map[string]any{"query": "trace retry_job", "mode": "evidence"},
+		OutputSchema: types.OutputSchemaRef{Name: "repo_inspection_v2"},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", bytes.NewReader(body))
+	setBrokerIdentity(req, "alice", "user")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("submit expected %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
+	}
+	var submitResp types.SubmitJobResponse
+	if err := json.NewDecoder(rec.Body).Decode(&submitResp); err != nil {
+		t.Fatalf("decode submit: %v", err)
+	}
+	if submitResp.ReleasedResult == nil || submitResp.ReleasedResult.Result == nil {
+		t.Fatalf("expected inline released result, got %#v", submitResp.ReleasedResult)
+	}
+	if submitResp.ReleasedResult.State != types.JobStateSucceeded {
+		t.Fatalf("expected succeeded inline release, got %#v", submitResp.ReleasedResult)
 	}
 }
 

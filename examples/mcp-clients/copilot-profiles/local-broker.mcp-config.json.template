@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "local-ai-compute-broker": {
+      "command": "__REPO_ROOT__/examples/mcp-clients/run_broker_mcp.sh",
+      "args": [],
+      "env": {
+        "BROKER_BACKEND": "local",
+        "BROKER_LOCAL_MODE": "command",
+        "BROKER_LOCAL_SCRIPT_PATH": "__REPO_ROOT__/deploy/local/broker_worker.sh",
+        "BROKER_JOB_STORE_PATH": "__REPO_ROOT__/.broker/copilot-local-jobs.json",
+        "BROKER_RUN_ROOT_PATH": "__REPO_ROOT__/.broker/copilot-local-runs",
+        "BROKER_REPO_ROOT_PATH": "__REPO_ROOT__",
+        "BROKER_AUDIT_LOG_PATH": "__REPO_ROOT__/.broker/copilot-local-audit.jsonl",
+        "BROKER_MCP_ACTOR": "copilot-cli",
+        "BROKER_MCP_ROLE": "user"
+      }
+    }
+  }
+}

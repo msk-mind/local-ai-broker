@@ -10,12 +10,15 @@ Use broker tools first for:
 
 Prefer `inspect_repo`, `summarize_logs`, `debug_with_local_context`, `rag_compress`, and `propose_patch` over direct ad hoc repository inspection when the task can be broker-mediated.
 
+For non-trivial broker-mediated work, call the broker tool with `wait_for_result=true` so the session gets the released result instead of a bare job id.
+
 Only skip the broker when:
 - the task is trivial and does not benefit from local retrieval or compression
 - the broker is unavailable
 - the broker result is degraded, non-authoritative, or clearly insufficient for the task
 
 If the broker returns degraded retrieval quality, treat it as non-authoritative and verify directly in the repo before making strong claims.
+If the broker returns cited findings, incorporate them into the answer and reference the cited files rather than restating unsupported guesses.
 """
 
 mcp_servers."local-ai-compute-broker".command = "__REPO_ROOT__/examples/mcp-clients/run_broker_mcp.sh"

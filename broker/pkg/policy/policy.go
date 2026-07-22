@@ -80,6 +80,12 @@ func requiresSensitiveReleaseFiltering(job types.Job) bool {
 			return true
 		}
 	}
+	for _, artifact := range job.Artifacts {
+		classification := strings.ToLower(strings.TrimSpace(artifact.Classification))
+		if _, denied := sensitiveClassifications[classification]; denied {
+			return true
+		}
+	}
 	return false
 }
 
@@ -150,6 +156,12 @@ func redactPayload(payload map[string]any) map[string]any {
 			out[key] = "[REDACTED]"
 		case "paths", "related_paths":
 			out[key] = redactStringSlice(value)
+		case "excerpt", "raw_excerpt", "content", "source_text":
+			if _, ok := value.(string); ok {
+				out[key] = "[REDACTED]"
+			} else {
+				out[key] = redactValue(lowerKey, value)
+			}
 		default:
 			out[key] = redactValue(lowerKey, value)
 		}

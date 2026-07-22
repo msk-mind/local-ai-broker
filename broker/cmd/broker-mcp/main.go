@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"os"
+	"time"
 
 	"github.com/msk-mind/local-ai-broker/broker/cmd/common"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/audit"
@@ -33,6 +34,13 @@ func main() {
 	if err != nil {
 		logger.Fatalf("initialize backend: %v", err)
 	}
+	if localBackend, ok := backend.(*local.Backend); ok {
+		if pid, started, err := localBackend.StartInspectRepoWarmDaemon(); err != nil {
+			logger.Fatalf("initialize local inspect_repo warm daemon: %v", err)
+		} else if started {
+			logger.Printf("local inspect_repo warm daemon ready pid=%d", pid)
+		}
+	}
 
 	svc := service.NewWithAuditAndOptionsAndConfig(
 		jobStore,
@@ -49,11 +57,37 @@ func main() {
 		},
 		&cfg,
 	)
+	gpuContext, stopGPUControlPlane := context.WithCancel(context.Background())
+	defer stopGPUControlPlane()
+	gpuManager, err := common.StartGPUServiceControlPlane(gpuContext, cfg, backend, logger)
+	if err != nil {
+		logger.Fatalf("initialize GPU service control plane: %v", err)
+	}
+	if cfg.InspectRepoPrewarmEnabled {
+		svc.StartInspectRepoPrewarm(context.Background(), logger, cfg.InspectRepoPrewarmURI, cfg.InspectRepoPrewarmQuery)
+	}
+	defer func() {
+		stopGPUControlPlane()
+		if gpuManager == nil {
+			return
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		if err := gpuManager.Shutdown(cleanupCtx); err != nil {
+			logger.Printf("GPU service shutdown cleanup failed: %v", err)
+		}
+	}()
 
-	server := mcp.NewServer(svc, auth.Principal{
+	var gpuCapabilities func(context.Context) (any, error)
+	if gpuManager != nil {
+		gpuCapabilities = func(ctx context.Context) (any, error) {
+			return gpuManager.Capabilities(ctx)
+		}
+	}
+	server := mcp.NewServerWithGPUCapabilities(svc, auth.Principal{
 		Actor: cfg.MCPActor,
 		Role:  cfg.MCPRole,
-	})
+	}, gpuCapabilities)
 	if err := server.ServeStdio(context.Background(), os.Stdin, os.Stdout); err != nil {
 		logger.Fatalf("serve mcp: %v", err)
 	}

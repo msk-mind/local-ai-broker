@@ -159,9 +159,12 @@ With that profile:
 - ordinary indexing work stays on CPU
 - routine RAG compression defaults to the P40 tier and requests a typed GPU such as `gpu:p40:1`
 - retries or harder patch-generation flows can escalate to the A100 tier
+- when `BROKER_SLURM_ENABLE_DYNAMIC_PLACEMENT=1`, the broker uses current `sinfo` availability and `squeue` pressure to rank eligible GPU tiers, and can promote routine P40 work to A100 when P40 is unavailable or materially more congested
 - workers receive an `execution_plan.json` with the broker-selected model profile, runtime, and runtime connection metadata
 
-The broker does not reserve GPUs. Each request still runs as a normal Slurm job and releases resources on completion or preemption.
+Those task-level runtime settings are retained for tools that have not yet
+migrated. `inspect_repo` instead maintains independent warm P40 services and
+starts V100/A100 service jobs on demand; its request worker remains CPU-only.
 
 ## Option 2C: Smoke A Live `llama.cpp` RAG Worker
 
@@ -230,7 +233,7 @@ Expected broker-facing shape:
   "runtime_diagnostics": {
     "backend_name": "llama.cpp",
     "backend_mode": "unavailable",
-    "selected_model": "gpt-oss-20b.p40",
+    "selected_model": "/operator/configured/model/path",
     "resource_tier": "p40-rag-compression",
     "endpoint_configured": true,
     "llm_available": false,

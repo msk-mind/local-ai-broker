@@ -10,6 +10,8 @@ Use broker tools first for:
 
 Prefer `inspect_repo`, `summarize_logs`, `debug_with_local_context`, `rag_compress`, and `propose_patch` over direct ad hoc repository inspection when the task can be broker-mediated.
 
+For non-trivial broker-mediated work, call the broker tool with `wait_for_result=true` so the session waits for the released result instead of bypassing MCP due to scheduler latency.
+
 Prefer the broker's scheduler-backed execution path when the task is likely to benefit from on-prem compute or cluster placement.
 
 Only skip the broker when:
@@ -18,6 +20,7 @@ Only skip the broker when:
 - the broker result is degraded, non-authoritative, or clearly insufficient for the task
 
 If the broker returns degraded retrieval quality, treat it as non-authoritative and verify directly in the repo before making strong claims.
+If the broker returns cited findings, incorporate them into the answer and reference the cited files rather than restating unsupported guesses.
 """
 
 mcp_servers."local-ai-compute-broker".command = "__REPO_ROOT__/examples/mcp-clients/run_broker_mcp.sh"
@@ -29,7 +32,9 @@ BROKER_SLURM_MODE = "command"
 BROKER_SLURM_SUBMIT_CMD = "/usr/bin/sbatch"
 BROKER_SLURM_STATUS_CMD = "/usr/bin/sacct"
 BROKER_SLURM_CANCEL_CMD = "/usr/bin/scancel"
+BROKER_SLURM_INFO_CMD = "/usr/bin/sinfo"
 BROKER_SLURM_SCRIPT_PATH = "__REPO_ROOT__/deploy/slurm/broker_worker.slurm"
+BROKER_SLURM_ENABLE_DYNAMIC_PLACEMENT = "1"
 BROKER_SLURM_PARTITION_GPU = "hpc"
 BROKER_SLURM_GPU_REQUEST_MODE = "gres"
 BROKER_SLURM_GPU_TYPE_P40 = "p40"
@@ -38,6 +43,9 @@ BROKER_RUN_ROOT_PATH = "__REPO_ROOT__/.broker/codex-slurm-runs"
 BROKER_REPO_ROOT_PATH = "__REPO_ROOT__"
 BROKER_AUDIT_LOG_PATH = "__REPO_ROOT__/.broker/codex-slurm-audit.jsonl"
 BROKER_SLURM_NODELIST_P40 = "pllimsksparky[1-4]"
-BROKER_MODEL_PROFILE_P40 = "gpt-oss-20b.p40"
+BROKER_MODEL_PROFILE_P40 = ""
 BROKER_MCP_ACTOR = "codex-cli"
 BROKER_MCP_ROLE = "user"
+# Loads the site GPU-service registry, control-plane token, and exact runtime
+# profiles. Override this with a deployment-owned env file when needed.
+BROKER_ENV_FILE = "__REPO_ROOT__/configs/broker/cdsi-live.env"

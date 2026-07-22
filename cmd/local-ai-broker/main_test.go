@@ -38,9 +38,11 @@ func TestLooksLikeRepoRoot(t *testing.T) {
 	dir := t.TempDir()
 	mustMkdirAll(t, filepath.Join(dir, "broker", "cmd", "broker-server"))
 	mustMkdirAll(t, filepath.Join(dir, "examples", "mcp-clients", "codex-profiles"))
+	mustMkdirAll(t, filepath.Join(dir, "examples", "mcp-clients", "copilot-profiles"))
 	mustWriteFile(t, filepath.Join(dir, "go.mod"), "module github.com/msk-mind/local-ai-broker\n")
 	mustWriteFile(t, filepath.Join(dir, "broker", "cmd", "broker-server", "main.go"), "package main\n")
 	mustWriteFile(t, filepath.Join(dir, "examples", "mcp-clients", "codex-profiles", "local-broker.config.toml.template"), "x\n")
+	mustWriteFile(t, filepath.Join(dir, "examples", "mcp-clients", "copilot-profiles", "local-broker.mcp-config.json.template"), "x\n")
 	if !looksLikeRepoRoot(dir) {
 		t.Fatal("expected repo root to be recognized")
 	}
@@ -162,6 +164,12 @@ func TestRunInstallRequiresTarget(t *testing.T) {
 	}
 }
 
+func TestRunInstallRejectsUnknownTarget(t *testing.T) {
+	if err := runInstall([]string{"bogus"}); err == nil {
+		t.Fatal("expected unknown install target error")
+	}
+}
+
 func TestPickFreeLoopbackAddr(t *testing.T) {
 	addr, err := pickFreeLoopbackAddr()
 	if err != nil {
@@ -169,6 +177,124 @@ func TestPickFreeLoopbackAddr(t *testing.T) {
 	}
 	if _, err := net.ResolveTCPAddr("tcp", addr); err != nil {
 		t.Fatalf("resolve addr %q: %v", addr, err)
+	}
+}
+
+func TestResolveConfigPathAndDefaults(t *testing.T) {
+	repoRoot := "/repo"
+	configDir := "/repo/configs/broker"
+
+	if got := resolveConfigPath(repoRoot, configDir, "__REPO_ROOT__/deploy/local/broker_worker.sh"); got != "/repo/deploy/local/broker_worker.sh" {
+		t.Fatalf("unexpected repo-root substitution: %q", got)
+	}
+	if got := resolveConfigPath(repoRoot, configDir, "generated.local.json"); got != "/repo/configs/broker/generated.local.json" {
+		t.Fatalf("unexpected relative config path: %q", got)
+	}
+	if got := resolveConfigPath(repoRoot, configDir, "/tmp/demo.json"); got != "/tmp/demo.json" {
+		t.Fatalf("unexpected absolute config path rewrite: %q", got)
+	}
+
+	tempRepo := t.TempDir()
+	mustMkdirAll(t, filepath.Join(tempRepo, "configs", "broker"))
+	mustWriteFile(t, filepath.Join(tempRepo, "configs", "broker", "generated.local.json"), "{}\n")
+	mustWriteFile(t, filepath.Join(tempRepo, "configs", "broker", "generated.cdsi-slurm.json"), "{}\n")
+
+	if got := defaultBootstrapConfigPath(tempRepo, "local"); got != filepath.Join(tempRepo, "configs", "broker", "generated.local.json") {
+		t.Fatalf("unexpected local default config path: %q", got)
+	}
+	if got := defaultBootstrapConfigPath(tempRepo, "slurm"); got != filepath.Join(tempRepo, "configs", "broker", "generated.cdsi-slurm.json") {
+		t.Fatalf("unexpected slurm default config path: %q", got)
+	}
+}
+
+func TestSelectModeAndEnvHelpers(t *testing.T) {
+	if got := selectMode(true, false, "slurm"); got != "local" {
+		t.Fatalf("unexpected local selection: %q", got)
+	}
+	if got := selectMode(false, true, "local"); got != "slurm" {
+		t.Fatalf("unexpected slurm selection: %q", got)
+	}
+	if got := selectMode(false, false, "local"); got != "local" {
+		t.Fatalf("unexpected fallback selection: %q", got)
+	}
+
+	t.Setenv("BROKER_TEST_ENV_OR", "set")
+	if got := envOr("BROKER_TEST_ENV_OR", "fallback"); got != "set" {
+		t.Fatalf("unexpected envOr value: %q", got)
+	}
+	if got := envOr("BROKER_TEST_ENV_OR_MISSING", "fallback"); got != "fallback" {
+		t.Fatalf("unexpected envOr fallback: %q", got)
+	}
+}
+
+func TestDefaultBrokerEnv(t *testing.T) {
+	envMap := defaultBrokerEnv("/repo", "local")
+	if envMap["BROKER_BACKEND"] != "local" {
+		t.Fatalf("unexpected backend: %#v", envMap)
+	}
+	if envMap["BROKER_LOCAL_SCRIPT_PATH"] != "/repo/deploy/local/broker_worker.sh" {
+		t.Fatalf("unexpected local script path: %#v", envMap)
+	}
+	if envMap["BROKER_REPO_ROOT_PATH"] != "/repo" {
+		t.Fatalf("unexpected repo root path: %#v", envMap)
+	}
+
+	slurmEnv := defaultBrokerEnv("/repo", "slurm")
+	if slurmEnv["BROKER_BACKEND"] != "slurm" {
+		t.Fatalf("unexpected slurm backend: %#v", slurmEnv)
+	}
+	if slurmEnv["BROKER_SLURM_SCRIPT_PATH"] != "/repo/deploy/slurm/broker_worker.slurm" {
+		t.Fatalf("unexpected slurm script path: %#v", slurmEnv)
+	}
+}
+
+func TestMergeEnvAndPathHelpers(t *testing.T) {
+	t.Setenv("LOCAL_AI_BROKER_TEST_KEEP", "present")
+	merged := mergeEnv(map[string]string{
+		"LOCAL_AI_BROKER_TEST_KEEP": "override",
+		"LOCAL_AI_BROKER_TEST_NEW":  "new",
+	})
+
+	foundKeep := false
+	foundNew := false
+	for _, item := range merged {
+		if item == "LOCAL_AI_BROKER_TEST_KEEP=override" {
+			foundKeep = true
+		}
+		if item == "LOCAL_AI_BROKER_TEST_NEW=new" {
+			foundNew = true
+		}
+	}
+	if !foundKeep || !foundNew {
+		t.Fatalf("expected merged env overrides, got %#v", merged)
+	}
+
+	path := filepath.Join(t.TempDir(), "profile.toml")
+	if profileExists(path) {
+		t.Fatal("expected missing profile to return false")
+	}
+	mustWriteFile(t, path, "demo\n")
+	if !profileExists(path) {
+		t.Fatal("expected existing profile to return true")
+	}
+}
+
+func TestBuildBrokerServerBinaryCreatesExecutableAndCleanupRemovesIt(t *testing.T) {
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		t.Fatalf("find repo root: %v", err)
+	}
+	binaryPath, cleanup, err := buildBrokerServerBinary(repoRoot)
+	if err != nil {
+		t.Fatalf("build broker server binary: %v", err)
+	}
+	if _, err := os.Stat(binaryPath); err != nil {
+		t.Fatalf("expected built binary to exist: %v", err)
+	}
+	binaryDir := filepath.Dir(binaryPath)
+	cleanup()
+	if _, err := os.Stat(binaryDir); !os.IsNotExist(err) {
+		t.Fatalf("expected cleanup to remove temp binary dir, stat err=%v", err)
 	}
 }
 

@@ -8,9 +8,10 @@ Default flow:
 
 1. Remote agent submits a broker task.
 2. Broker validates request, policy, and budgets.
-3. Broker routes work to a backend such as Slurm or local command mode.
-4. Worker performs retrieval, compression, or analysis locally.
-5. Broker returns compact structured output plus evidence references.
+3. Broker routes ordinary tasks to a backend such as Slurm or local command mode.
+4. For `inspect_repo`, the request worker uses healthy scheduler-managed GPU services from the shared registry; it does not start a model.
+5. Worker performs retrieval, compression, or analysis locally.
+6. Broker returns compact structured output plus evidence references.
 
 Raw repositories, logs, documents, and other sensitive inputs stay local unless explicitly released.
 
@@ -38,6 +39,24 @@ Broker MCP server or HTTP API
                       +--> local model runtime
                       +--> schema-validated result
 ```
+
+`inspect_repo` adds a service control plane beside the ordinary job path:
+
+```text
+GPU service reconciler ----> Slurm service jobs
+        |                       |
+        |                       +--> p40-retrieval (warm)
+        |                       +--> p40-synthesis (warm)
+        |                       +--> v100-reasoning (scale to zero, 4 GPUs)
+        |                       +--> a100-single (scale to zero, 1 GPU)
+        |                       +--> a100-multigpu (scale to zero, 4 GPUs)
+        v
+shared authenticated endpoint registry
+        |
+        +--> healthy leases only --> inspect_repo request worker
+```
+
+The registry is cluster-visible state. A record binds a service ID and role to its endpoint, bearer credential, model profile, supported operations, context limit, GPU type and count, Slurm job ID, heartbeat, lease expiry, and health/failure metadata. An authenticated control-request directory carries coalesced scale-from-zero demand to the reconciler. Control, registration, and endpoint credentials remain internal and are redacted from released diagnostics.
 
 ## Core Components
 
@@ -93,6 +112,21 @@ Workers emit:
 - `heartbeat.json`
 - run metadata and worker logs
 
+The `inspect_repo` worker receives only broker-owned registry/control paths in its protected execution plan. It routes to fresh authenticated leases read from the private registry; caller task parameters cannot supply endpoints or registry paths. Missing endpoints degrade retrieval to lexical evidence and never authorize CPU synthesis.
+
+### GPU Service Reconciler
+
+The reconciler is independent of inspection requests. It:
+
+- maintains a minimum of one `p40-retrieval` and one `p40-synthesis` replica
+- renews four-hour leases while heartbeats remain healthy
+- enforces configurable per-role replica limits (normally one minimum and two maximum for each P40 role)
+- replaces services that miss startup, heartbeat, health, or lease deadlines
+- recovers valid registry leases after broker restart without duplicating replicas
+- leaves V100 and A100 profiles at zero minimum and one maximum replica
+
+An inspection request may select or wait for a service, but model startup remains a scheduler/reconciler responsibility.
+
 ### Cache And Artifact Layer
 
 Responsibilities:
@@ -117,36 +151,38 @@ The broker currently centers on structured local tasks rather than raw model ser
 
 All tasks use the same job lifecycle and return schema-first JSON.
 
-## RAG Compression Position
+`inspect_repo` uses the breaking `repo_inspection_v2` contract. A non-empty query is required and `mode` is `auto`, `evidence`, or `answer`. The other RAG-oriented tasks retain their existing schemas until each has an independent golden evaluation suite.
 
-RAG compression is the main token-reduction path.
+## `inspect_repo` Data Plane
 
-Local workers should:
+CPU work is deliberately bounded to authorized file discovery, syntax-aware chunking, hashing, SQLite FTS5 exact search, lexical fallback, and cache bookkeeping. Normal semantic work is GPU-backed:
 
-1. discover inputs
-2. chunk and index locally
-3. retrieve and rerank
-4. deduplicate
-5. compress into evidence packs with source references
-6. validate before release
+1. Build or refresh content-addressed chunks and the repository fingerprint.
+2. Check the `p40-retrieval` fingerprinted index; upload bounded chunk batches only on an index miss, then request FAISS candidates by fingerprint.
+3. Query SQLite FTS5 independently for identifiers, phrases, and paths.
+4. Fuse semantic and lexical ranks with reciprocal-rank fusion.
+5. Rerank the top 64 candidates on `p40-retrieval`.
+6. Release at most 12 evidence chunks, normally no more than two per file.
+7. Ask `p40-synthesis` for strict structured output grounded in those evidence IDs.
+8. Validate citations, shape, and token budgets before release.
 
-The remote model should receive evidence packs, not raw corpora.
+If GPU retrieval is unavailable, the worker returns degraded lexical evidence while the reconciler replaces the service. CPU-only processing can produce `evidence_only`; it cannot produce an answer-ready result.
 
-## Execution Profiles
+Synthesis escalates in strict order: warm P40, a four-GPU V100 service, then adaptive A100. Availability, queue delay, timeout, or service failure selects `a100-single`; OOM, context overflow, repeated invalid synthesis, or a configured model limit selects `a100-multigpu`. An ordinary unsupported claim first gets one same-tier retry with validator feedback.
 
-Current practical tiers:
+## GPU Service Profiles
 
-- `cpu-rag-indexing`
-- `p40-rag-compression`
-- `a100-reasoning`
+`inspect_repo` recognizes five first-class service tiers:
 
-Expected behavior:
+| Tier | GPUs | Lifecycle | Supported role |
+| --- | ---: | --- | --- |
+| `p40-retrieval` | 1 P40 | warm, renewable lease | embeddings, FAISS search, cross-encoder reranking |
+| `p40-synthesis` | 1 P40 | warm, renewable lease | structured chat completion |
+| `v100-reasoning` | 4 V100 on one node | scale from zero | stronger tensor-parallel synthesis fallback |
+| `a100-single` | 1 A100 | scale from zero | availability/service fallback |
+| `a100-multigpu` | 4 A100 on one node | scale from zero | capacity/context/validation fallback |
 
-- CPU does discovery, chunking, hashing, and lexical retrieval
-- P40 is the default low-contention local compression tier
-- A100 is reserved for harder reasoning or larger local jobs
-
-GPUs are not reserved persistently. Work runs as ordinary scheduled jobs.
+Every enabled profile requires operator-provided model path, quantization, context limit, runtime, and runtime arguments. The broker does not hardcode model artifacts. `cpu-rag-indexing`, `p40-rag-compression`, and `a100-reasoning` remain ordinary-job compatibility tiers for tasks not yet migrated; they are not evidence of GPU-backed `inspect_repo` quality.
 
 ## Current Boundary
 
@@ -157,5 +193,6 @@ The current repository is scoped to:
 - MCP and HTTP interfaces
 - Slurm and local execution backends
 - evidence-preserving local compression
+- scheduler-managed GPU inference services and their lease registry
 
-Future backends or runtimes can extend this boundary without changing the northbound broker model.
+Authorization, classification, audit logging, artifact release restrictions, and the common job lifecycle still apply on both paths. Full traces remain local/optional; the default release is the v2 result, evidence pack, and compact credential-free GPU diagnostics. Hidden trace artifacts cannot be reintroduced through `artifact://`, and an allowed source artifact promotes its classification monotonically into the consuming job before cache lookup and staging.

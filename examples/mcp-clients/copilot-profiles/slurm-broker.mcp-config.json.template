@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "local-ai-compute-broker": {
+      "command": "__REPO_ROOT__/examples/mcp-clients/run_broker_mcp.sh",
+      "args": [],
+      "env": {
+        "BROKER_BACKEND": "slurm",
+        "BROKER_SLURM_MODE": "command",
+        "BROKER_SLURM_SUBMIT_CMD": "/usr/bin/sbatch",
+        "BROKER_SLURM_STATUS_CMD": "/usr/bin/sacct",
+        "BROKER_SLURM_CANCEL_CMD": "/usr/bin/scancel",
+        "BROKER_SLURM_SCRIPT_PATH": "__REPO_ROOT__/deploy/slurm/broker_worker.slurm",
+        "BROKER_SLURM_PARTITION_GPU": "hpc",
+        "BROKER_SLURM_GPU_REQUEST_MODE": "gres",
+        "BROKER_SLURM_GPU_TYPE_P40": "p40",
+        "BROKER_SLURM_NODELIST_P40": "pllimsksparky[1-4]",
+        "BROKER_MODEL_PROFILE_P40": "",
+        "BROKER_JOB_STORE_PATH": "__REPO_ROOT__/.broker/copilot-slurm-jobs.json",
+        "BROKER_RUN_ROOT_PATH": "__REPO_ROOT__/.broker/copilot-slurm-runs",
+        "BROKER_REPO_ROOT_PATH": "__REPO_ROOT__",
+        "BROKER_AUDIT_LOG_PATH": "__REPO_ROOT__/.broker/copilot-slurm-audit.jsonl",
+        "BROKER_MCP_ACTOR": "copilot-cli",
+        "BROKER_MCP_ROLE": "user",
+        "BROKER_ENV_FILE": "__REPO_ROOT__/configs/broker/cdsi-live.env"
+      }
+    }
+  }
+}

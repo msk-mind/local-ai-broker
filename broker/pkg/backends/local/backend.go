@@ -5,29 +5,41 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	"github.com/msk-mind/local-ai-broker/broker/pkg/backends"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/config"
+	"github.com/msk-mind/local-ai-broker/broker/pkg/jobenv"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/types"
 )
 
 type Backend struct {
-	counter atomic.Uint64
-	mode    string
-	cfg     config.Config
+	counter     atomic.Uint64
+	mode        string
+	cfg         config.Config
+	completions struct {
+		once     sync.Once
+		listener net.PacketConn
+		mu       sync.Mutex
+		waiters  map[string]chan struct{}
+	}
 }
 
 type heartbeat struct {
 	State string `json:"state"`
 	Phase string `json:"phase"`
 }
+
+const runtimeTimeoutMarker = "runtime.timeout"
 
 func NewBackend(cfg config.Config) *Backend {
 	return &Backend{
@@ -40,22 +52,187 @@ func (b *Backend) Name() string {
 	return "local"
 }
 
+func (b *Backend) StartInspectRepoWarmDaemon() (int, bool, error) {
+	if !b.cfg.LocalInspectRepoWarmEnabled || !b.commandMode() {
+		return 0, false, nil
+	}
+	repoRoot := strings.TrimSpace(b.cfg.RepoRootPath)
+	if repoRoot == "" {
+		repoRoot = "."
+	}
+	workerPath, ok := directWorkerPath(repoRoot, b.cfg.LocalScriptPath, "inspect_repo")
+	if !ok {
+		return 0, false, nil
+	}
+	pid, err := ensureInspectRepoWarmDaemon(repoRoot, filepath.Join(b.cfg.RunRootPath, ".inspect-repo-warm"), workerPath)
+	if err != nil {
+		return 0, true, err
+	}
+	return pid, true, nil
+}
+
+func (b *Backend) commandMode() bool {
+	return b.mode == "command"
+}
+
+func (b *Backend) nextStubRunID() string {
+	return fmt.Sprintf("local-%06d", b.counter.Add(1))
+}
+
+func localRunStatus(backendRunID string, state types.JobState, rawState string) backends.RunStatus {
+	return backends.RunStatus{
+		BackendRunID: backendRunID,
+		State:        state,
+		RawState:     rawState,
+	}
+}
+
 func (b *Backend) SubmitRun(_ context.Context, job types.Job) (backends.SubmitResponse, error) {
-	if b.mode != "command" {
-		runID := fmt.Sprintf("local-%06d", b.counter.Add(1))
+	if !b.commandMode() {
+		return backends.StubSubmitResponse(b.Name(), b.nextStubRunID()), nil
+	}
+
+	runRoot := jobenv.RunRoot(job)
+	repoRoot := jobenv.RepoRoot(job)
+	runID := job.ID
+	outputDir := filepath.Join(runRoot, runID)
+	if info, err := os.Stat(outputDir); err != nil {
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(outputDir, 0o755); err != nil {
+				return backends.SubmitResponse{}, fmt.Errorf("create output dir: %w", err)
+			}
+		} else {
+			return backends.SubmitResponse{}, fmt.Errorf("stat output dir: %w", err)
+		}
+	} else if !info.IsDir() {
+		return backends.SubmitResponse{}, fmt.Errorf("output dir path is not a directory: %s", outputDir)
+	}
+
+	cmd, err := b.commandForJob(repoRoot, outputDir, job)
+	if err != nil {
+		return backends.SubmitResponse{}, err
+	}
+	completionSocketPath := b.registerCompletionWaiter(runID)
+	if requestPath, daemonPID, ok, err := b.enqueueInspectRepoWarmRequest(repoRoot, outputDir, job, backends.InlineExecutionBundle{}); err != nil {
+		return backends.SubmitResponse{}, err
+	} else if ok {
+		if err := os.WriteFile(filepath.Join(outputDir, "local.pid"), []byte(strconv.Itoa(daemonPID)), 0o644); err != nil {
+			return backends.SubmitResponse{}, fmt.Errorf("write warm daemon pid file: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(outputDir, "warm-request.marker"), []byte(filepath.Base(requestPath)), 0o644); err != nil {
+			return backends.SubmitResponse{}, fmt.Errorf("write warm request marker: %w", err)
+		}
+		b.startWarmRuntimeWatchdog(outputDir, job.Request.Constraints.MaxRuntimeSeconds)
 		return backends.SubmitResponse{
 			BackendKind:  b.Name(),
 			BackendRunID: runID,
-			InitialState: types.JobStateQueued,
+			InitialState: types.JobStateDispatching,
 		}, nil
 	}
 
-	runRoot := brokerRunRoot(job)
-	repoRoot := brokerRepoRoot(job)
+	stdoutLog, err := os.OpenFile(filepath.Join(outputDir, "stdout.log"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return backends.SubmitResponse{}, fmt.Errorf("open local stdout log: %w", err)
+	}
+	stderrLog, err := os.OpenFile(filepath.Join(outputDir, "stderr.log"), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		_ = stdoutLog.Close()
+		return backends.SubmitResponse{}, fmt.Errorf("open local stderr log: %w", err)
+	}
+	cmd.Stdout = stdoutLog
+	cmd.Stderr = stderrLog
+
+	if completionSocketPath != "" {
+		cmd.Args = append(cmd.Args, "--completion-socket-path", completionSocketPath)
+	}
+	if err := cmd.Start(); err != nil {
+		_ = stdoutLog.Close()
+		_ = stderrLog.Close()
+		return backends.SubmitResponse{}, fmt.Errorf("start local worker: %w", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(outputDir, "local.pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+		_ = cmd.Process.Kill()
+		_ = stdoutLog.Close()
+		_ = stderrLog.Close()
+		return backends.SubmitResponse{}, fmt.Errorf("write pid file: %w", err)
+	}
+	stopWatchdog := b.startRuntimeWatchdog(outputDir, cmd.Process, job.Request.Constraints.MaxRuntimeSeconds)
+
+	go func(stdoutHandle, stderrHandle *os.File) {
+		_ = cmd.Wait()
+		stopWatchdog()
+		_ = stdoutHandle.Close()
+		_ = stderrHandle.Close()
+	}(stdoutLog, stderrLog)
+
+	return backends.SubmitResponse{
+		BackendKind:  b.Name(),
+		BackendRunID: runID,
+		InitialState: types.JobStateDispatching,
+	}, nil
+}
+
+func (b *Backend) SubmitWarmInspectRepoRun(_ context.Context, job types.Job, bundle backends.InlineExecutionBundle) (backends.SubmitResponse, bool, error) {
+	if !b.commandMode() || !b.warmInspectRepoEnabled(job) {
+		return backends.SubmitResponse{}, false, nil
+	}
+	runRoot := jobenv.RunRoot(job)
+	repoRoot := jobenv.RepoRoot(job)
 	runID := job.ID
 	outputDir := filepath.Join(runRoot, runID)
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return backends.SubmitResponse{}, fmt.Errorf("create output dir: %w", err)
+	if info, err := os.Stat(outputDir); err != nil {
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(outputDir, 0o755); err != nil {
+				return backends.SubmitResponse{}, false, fmt.Errorf("create output dir: %w", err)
+			}
+		} else {
+			return backends.SubmitResponse{}, false, fmt.Errorf("stat output dir: %w", err)
+		}
+	} else if !info.IsDir() {
+		return backends.SubmitResponse{}, false, fmt.Errorf("output dir path is not a directory: %s", outputDir)
+	}
+	b.registerCompletionWaiter(runID)
+	requestPath, daemonPID, ok, err := b.enqueueInspectRepoWarmRequest(repoRoot, outputDir, job, bundle)
+	if err != nil {
+		return backends.SubmitResponse{}, false, err
+	}
+	if !ok {
+		return backends.SubmitResponse{}, false, nil
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, "local.pid"), []byte(strconv.Itoa(daemonPID)), 0o644); err != nil {
+		return backends.SubmitResponse{}, false, fmt.Errorf("write warm daemon pid file: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, "warm-request.marker"), []byte(filepath.Base(requestPath)), 0o644); err != nil {
+		return backends.SubmitResponse{}, false, fmt.Errorf("write warm request marker: %w", err)
+	}
+	b.startWarmRuntimeWatchdog(outputDir, job.Request.Constraints.MaxRuntimeSeconds)
+	return backends.SubmitResponse{
+		BackendKind:  b.Name(),
+		BackendRunID: runID,
+		InitialState: types.JobStateDispatching,
+	}, true, nil
+}
+
+func (b *Backend) commandForJob(repoRoot, outputDir string, job types.Job) (*exec.Cmd, error) {
+	jobSpecPath := filepath.Join(outputDir, "job_spec.json")
+	executionPlanPath := filepath.Join(outputDir, "execution_plan.json")
+	inputManifestPath := filepath.Join(outputDir, "input_manifest.json")
+	heartbeatPath := filepath.Join(outputDir, "heartbeat.json")
+
+	if workerPath, ok := directWorkerPath(repoRoot, b.cfg.LocalScriptPath, job.TaskType); ok {
+		args := append(pythonLauncherArgsForTask(job.TaskType, workerPath), "--job-spec", jobSpecPath)
+		if workerAcceptsExecutionPlan(job.TaskType) {
+			args = append(args, "--execution-plan", executionPlanPath)
+		}
+		args = append(args,
+			"--input-manifest", inputManifestPath,
+			"--output-dir", outputDir,
+			"--heartbeat-path", heartbeatPath)
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = repoRoot
+		cmd.Env = append(os.Environ(), "BROKER_REPO_ROOT="+repoRoot)
+		return cmd, nil
 	}
 
 	scriptPath := resolvePath(repoRoot, b.cfg.LocalScriptPath)
@@ -68,93 +245,129 @@ func (b *Backend) SubmitRun(_ context.Context, job types.Job) (backends.SubmitRe
 		"BROKER_OUTPUT_DIR="+outputDir,
 		"BROKER_OUTPUT_SCHEMA="+job.Request.OutputSchema.Name,
 	)
+	return cmd, nil
+}
 
-	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-	if err != nil {
-		return backends.SubmitResponse{}, fmt.Errorf("open %s: %w", os.DevNull, err)
+func workerAcceptsExecutionPlan(taskType string) bool {
+	switch strings.TrimSpace(taskType) {
+	case "inspect_repo", "rag_compress", "debug_with_local_context", "summarize_logs", "propose_patch":
+		return true
+	default:
+		return false
 	}
-	defer devNull.Close()
-	cmd.Stdout = devNull
-	cmd.Stderr = devNull
+}
 
-	if err := cmd.Start(); err != nil {
-		return backends.SubmitResponse{}, fmt.Errorf("start local worker: %w", err)
+func pythonLauncherArgsForTask(taskType, workerPath string) []string {
+	args := []string{"python3"}
+	switch strings.TrimSpace(taskType) {
+	case "inspect_repo":
+		args = append(args, "-S")
 	}
+	args = append(args, workerPath)
+	return args
+}
 
-	if err := os.WriteFile(filepath.Join(outputDir, "local.pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
-		_ = cmd.Process.Kill()
-		return backends.SubmitResponse{}, fmt.Errorf("write pid file: %w", err)
+func directWorkerPath(repoRoot, localScriptPath, taskType string) (string, bool) {
+	base := filepath.Base(strings.TrimSpace(localScriptPath))
+	if base != "broker_worker.sh" && base != "broker_worker.slurm" {
+		return "", false
 	}
-
-	go func() {
-		_ = cmd.Wait()
-	}()
-
-	return backends.SubmitResponse{
-		BackendKind:  b.Name(),
-		BackendRunID: runID,
-		InitialState: types.JobStateDispatching,
-	}, nil
+	var relative string
+	switch strings.TrimSpace(taskType) {
+	case "document_summary":
+		relative = filepath.Join("workers", "document-summary", "main.py")
+	case "log_analysis":
+		relative = filepath.Join("workers", "log-analysis", "main.py")
+	case "repo_summary":
+		relative = filepath.Join("workers", "repo-summary", "main.py")
+	case "inspect_repo":
+		relative = filepath.Join("workers", "rag-compression", "inspect_repo_worker.py")
+	case "rag_compress", "debug_with_local_context", "summarize_logs", "propose_patch":
+		relative = filepath.Join("workers", "rag-compression", "main.py")
+	default:
+		return "", false
+	}
+	path := filepath.Join(repoRoot, relative)
+	if _, err := os.Stat(path); err != nil {
+		return "", false
+	}
+	return path, true
 }
 
 func (b *Backend) GetRun(_ context.Context, backendRunID string) (backends.RunStatus, error) {
-	if b.mode != "command" {
-		return backends.RunStatus{
-			BackendRunID: backendRunID,
-			State:        types.JobStateQueued,
-			RawState:     "STUB",
-		}, nil
+	if !b.commandMode() {
+		return backends.StubRunStatus(backendRunID), nil
 	}
 
 	runDir := filepath.Join(b.cfg.RunRootPath, backendRunID)
+	if _, err := os.Stat(filepath.Join(runDir, "result.json")); err == nil {
+		return localRunStatus(backendRunID, types.JobStateSucceeded, "COMPLETED"), nil
+	}
+	if _, err := os.Stat(filepath.Join(runDir, runtimeTimeoutMarker)); err == nil {
+		return backends.RunStatus{
+			BackendRunID: backendRunID,
+			State:        types.JobStateTimedOut,
+			RawState:     "TIMEOUT",
+			Diagnostics: map[string]any{
+				"backend_failure_category": "runtime_limit",
+				"runtime_timeout":          true,
+			},
+		}, nil
+	}
 	if hb, err := readHeartbeat(filepath.Join(runDir, "heartbeat.json")); err == nil {
 		if state, raw := mapHeartbeatState(hb.State); state != "" {
-			return backends.RunStatus{
-				BackendRunID: backendRunID,
-				State:        state,
-				RawState:     raw,
-			}, nil
+			if state == types.JobStateRunning {
+				pid, pidErr := readPID(filepath.Join(runDir, "local.pid"))
+				if pidErr == nil && !processAlive(pid) {
+					return failedRunStatus(backendRunID, runDir, "worker_exited", "EXITED"), nil
+				}
+			}
+			if state == types.JobStateFailed {
+				return failedRunStatus(backendRunID, runDir, "worker_failed", raw), nil
+			}
+			return localRunStatus(backendRunID, state, raw), nil
 		}
 	}
 
 	pid, err := readPID(filepath.Join(runDir, "local.pid"))
 	if err == nil && processAlive(pid) {
-		return backends.RunStatus{
-			BackendRunID: backendRunID,
-			State:        types.JobStateRunning,
-			RawState:     "RUNNING",
-		}, nil
-	}
-
-	if _, err := os.Stat(filepath.Join(runDir, "result.json")); err == nil {
-		return backends.RunStatus{
-			BackendRunID: backendRunID,
-			State:        types.JobStateSucceeded,
-			RawState:     "COMPLETED",
-		}, nil
+		return localRunStatus(backendRunID, types.JobStateRunning, "RUNNING"), nil
 	}
 
 	if err == nil {
-		return backends.RunStatus{
-			BackendRunID: backendRunID,
-			State:        types.JobStateFailed,
-			RawState:     "EXITED",
-		}, nil
+		return failedRunStatus(backendRunID, runDir, "worker_exited", "EXITED"), nil
 	}
 
+	return localRunStatus(backendRunID, types.JobStateQueued, "PENDING"), nil
+}
+
+func failedRunStatus(backendRunID, runDir, category, rawState string) backends.RunStatus {
 	return backends.RunStatus{
 		BackendRunID: backendRunID,
-		State:        types.JobStateQueued,
-		RawState:     "PENDING",
-	}, nil
+		State:        types.JobStateFailed,
+		RawState:     rawState,
+		Diagnostics: map[string]any{
+			"backend_failure_category": category,
+			"worker_output_dir":        runDir,
+			"stdout_log":               filepath.Join(runDir, "stdout.log"),
+			"stderr_log":               filepath.Join(runDir, "stderr.log"),
+		},
+	}
 }
 
 func (b *Backend) CancelRun(_ context.Context, backendRunID string) error {
-	if b.mode != "command" {
+	if !b.commandMode() {
+		return nil
+	}
+	runDir := filepath.Join(b.cfg.RunRootPath, backendRunID)
+	if _, err := os.Stat(filepath.Join(runDir, "warm-request.marker")); err == nil {
+		if err := os.WriteFile(filepath.Join(runDir, "cancel.request"), []byte("cancel\n"), 0o644); err != nil {
+			return fmt.Errorf("write cancel request: %w", err)
+		}
 		return nil
 	}
 
-	pid, err := readPID(filepath.Join(b.cfg.RunRootPath, backendRunID, "local.pid"))
+	pid, err := readPID(filepath.Join(runDir, "local.pid"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
@@ -166,6 +379,326 @@ func (b *Backend) CancelRun(_ context.Context, backendRunID string) error {
 		return fmt.Errorf("terminate local worker pid %d: %w", pid, err)
 	}
 	return nil
+}
+
+func (b *Backend) startRuntimeWatchdog(outputDir string, process *os.Process, seconds int) func() {
+	if seconds <= 0 || process == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		timer := time.NewTimer(time.Duration(seconds) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-done:
+			return
+		case <-timer.C:
+			if _, err := os.Stat(filepath.Join(outputDir, "result.json")); err == nil {
+				return
+			}
+			_ = os.WriteFile(filepath.Join(outputDir, runtimeTimeoutMarker), []byte("runtime limit exceeded\n"), 0o600)
+			_ = process.Kill()
+		}
+	}()
+	return func() {
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
+}
+
+func (b *Backend) startWarmRuntimeWatchdog(outputDir string, seconds int) {
+	if seconds <= 0 {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(time.Duration(seconds) * time.Second)
+		defer timer.Stop()
+		<-timer.C
+		if _, err := os.Stat(filepath.Join(outputDir, "result.json")); err == nil {
+			return
+		}
+		_ = os.WriteFile(filepath.Join(outputDir, runtimeTimeoutMarker), []byte("runtime limit exceeded\n"), 0o600)
+		_ = os.WriteFile(filepath.Join(outputDir, "cancel.request"), []byte("timeout\n"), 0o600)
+	}()
+}
+
+func (b *Backend) warmInspectRepoEnabled(job types.Job) bool {
+	return b.cfg.LocalInspectRepoWarmEnabled && b.commandMode() && strings.TrimSpace(job.TaskType) == "inspect_repo"
+}
+
+func (b *Backend) enqueueInspectRepoWarmRequest(repoRoot, outputDir string, job types.Job, bundle backends.InlineExecutionBundle) (string, int, bool, error) {
+	if !b.warmInspectRepoEnabled(job) {
+		return "", 0, false, nil
+	}
+	workerPath, ok := directWorkerPath(repoRoot, b.cfg.LocalScriptPath, job.TaskType)
+	if !ok {
+		return "", 0, false, nil
+	}
+	spoolDir := filepath.Join(b.cfg.RunRootPath, ".inspect-repo-warm")
+	daemonPID, err := ensureInspectRepoWarmDaemon(repoRoot, spoolDir, workerPath)
+	if err != nil {
+		return "", 0, false, err
+	}
+	requestPath := filepath.Join(spoolDir, "requests", job.ID+".json")
+	enqueuedNS := time.Now().UnixNano()
+	requestPayload := map[string]any{
+		"job_id":                     job.ID,
+		"output_dir":                 outputDir,
+		"heartbeat_path":             filepath.Join(outputDir, "heartbeat.json"),
+		"completion_socket_path":     b.completionSocketPath(),
+		"broker_request_enqueued_ns": enqueuedNS,
+		"broker_request_written_ns":  time.Now().UnixNano(),
+	}
+	if len(bundle.JobSpec) != 0 {
+		requestPayload["job_spec"] = bundle.JobSpec
+	} else {
+		requestPayload["job_spec_path"] = filepath.Join(outputDir, "job_spec.json")
+	}
+	if len(bundle.ExecutionPlan) != 0 {
+		requestPayload["execution_plan"] = bundle.ExecutionPlan
+	} else {
+		requestPayload["execution_plan_path"] = filepath.Join(outputDir, "execution_plan.json")
+	}
+	if len(bundle.InputManifest) != 0 {
+		requestPayload["input_manifest"] = bundle.InputManifest
+	} else {
+		requestPayload["input_manifest_path"] = filepath.Join(outputDir, "input_manifest.json")
+	}
+	if err := atomicWriteJSONFile(requestPath, requestPayload, 0o644); err != nil {
+		return "", 0, false, fmt.Errorf("write warm request: %w", err)
+	}
+	notifyInspectRepoWarmDaemon(spoolDir, filepath.Base(requestPath))
+	return requestPath, daemonPID, true, nil
+}
+
+func warmDaemonSocketPath(spoolDir string) string {
+	return filepath.Join(spoolDir, "daemon.sock")
+}
+
+func warmDaemonBusyMarkerPath(spoolDir string) string {
+	return filepath.Join(spoolDir, "busy.marker")
+}
+
+func warmDaemonBusy(spoolDir string) bool {
+	if _, err := os.Stat(warmDaemonBusyMarkerPath(spoolDir)); err == nil {
+		return true
+	}
+	return false
+}
+
+func waitForInspectRepoWarmDaemonReady(spoolDir string, pid int, waitWindow time.Duration) bool {
+	if pid <= 0 || waitWindow <= 0 {
+		return false
+	}
+	heartbeatPath := filepath.Join(spoolDir, "daemon-heartbeat.json")
+	socketPath := warmDaemonSocketPath(spoolDir)
+	deadline := time.Now().Add(waitWindow)
+	for time.Now().Before(deadline) {
+		if !processAlive(pid) {
+			return false
+		}
+		heartbeatReady := false
+		if _, err := os.Stat(heartbeatPath); err == nil {
+			heartbeatReady = true
+		}
+		socketReady := false
+		if _, err := os.Stat(socketPath); err == nil {
+			socketReady = true
+		}
+		if heartbeatReady && socketReady {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return processAlive(pid)
+}
+
+func ensureInspectRepoWarmDaemon(repoRoot, spoolDir, workerPath string) (int, error) {
+	if err := os.MkdirAll(filepath.Join(spoolDir, "requests"), 0o755); err != nil {
+		return 0, fmt.Errorf("create warm daemon spool: %w", err)
+	}
+	pidPath := filepath.Join(spoolDir, "daemon.pid")
+	if pid, err := readPID(pidPath); err == nil && processAlive(pid) {
+		_ = waitForInspectRepoWarmDaemonReady(spoolDir, pid, 100*time.Millisecond)
+		return pid, nil
+	}
+	stdoutLog, err := os.OpenFile(filepath.Join(spoolDir, "daemon.stdout.log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		return 0, fmt.Errorf("open warm daemon stdout log: %w", err)
+	}
+	stderrLog, err := os.OpenFile(filepath.Join(spoolDir, "daemon.stderr.log"), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	if err != nil {
+		_ = stdoutLog.Close()
+		return 0, fmt.Errorf("open warm daemon stderr log: %w", err)
+	}
+	cmd := exec.Command("python3", "-S", workerPath, "--daemon-spool-dir", spoolDir, "--repo-root", repoRoot)
+	cmd.Dir = repoRoot
+	cmd.Env = append(os.Environ(), "BROKER_REPO_ROOT="+repoRoot)
+	cmd.Stdout = stdoutLog
+	cmd.Stderr = stderrLog
+	if err := cmd.Start(); err != nil {
+		_ = stdoutLog.Close()
+		_ = stderrLog.Close()
+		return 0, fmt.Errorf("start warm daemon: %w", err)
+	}
+	pid := cmd.Process.Pid
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o644); err != nil {
+		_ = cmd.Process.Kill()
+		_ = stdoutLog.Close()
+		_ = stderrLog.Close()
+		return 0, fmt.Errorf("write warm daemon pid: %w", err)
+	}
+	go func(stdoutHandle, stderrHandle *os.File) {
+		_ = cmd.Wait()
+		_ = stdoutHandle.Close()
+		_ = stderrHandle.Close()
+	}(stdoutLog, stderrLog)
+	_ = waitForInspectRepoWarmDaemonReady(spoolDir, pid, 2*time.Second)
+	return pid, nil
+}
+
+func atomicWriteJSONFile(path string, payload any, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := fmt.Sprintf("%s.tmp-%d", path, os.Getpid())
+	_ = os.Remove(tmp)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(tmp, data, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func notifyInspectRepoWarmDaemon(spoolDir, requestName string) {
+	socketPath := warmDaemonSocketPath(spoolDir)
+	requestName = strings.TrimSpace(requestName)
+	if requestName == "" {
+		return
+	}
+	conn, err := net.Dial("unixgram", socketPath)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	_, _ = conn.Write([]byte(requestName))
+}
+
+func (b *Backend) AwaitLocalInspectRepoResult(ctx context.Context, backendRunID string, waitWindow time.Duration) bool {
+	if !b.commandMode() || strings.TrimSpace(backendRunID) == "" || waitWindow <= 0 {
+		return false
+	}
+	waiter := b.completionWaiter(backendRunID)
+	if waiter == nil {
+		return false
+	}
+	timer := time.NewTimer(waitWindow)
+	defer timer.Stop()
+	select {
+	case <-waiter:
+		return true
+	case <-timer.C:
+		return false
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (b *Backend) completionSocketPath() string {
+	runRoot := strings.TrimSpace(b.cfg.RunRootPath)
+	if runRoot == "" {
+		return ""
+	}
+	return filepath.Join(runRoot, ".local-inspect-repo-complete.sock")
+}
+
+func (b *Backend) registerCompletionWaiter(runID string) string {
+	runID = strings.TrimSpace(runID)
+	if runID == "" || !b.commandMode() {
+		return ""
+	}
+	if err := b.ensureCompletionListener(); err != nil {
+		return ""
+	}
+	b.completions.mu.Lock()
+	defer b.completions.mu.Unlock()
+	if b.completions.waiters == nil {
+		b.completions.waiters = make(map[string]chan struct{})
+	}
+	if existing := b.completions.waiters[runID]; existing != nil {
+		return b.completionSocketPath()
+	}
+	b.completions.waiters[runID] = make(chan struct{})
+	return b.completionSocketPath()
+}
+
+func (b *Backend) completionWaiter(runID string) chan struct{} {
+	if err := b.ensureCompletionListener(); err != nil {
+		return nil
+	}
+	b.completions.mu.Lock()
+	defer b.completions.mu.Unlock()
+	if b.completions.waiters == nil {
+		return nil
+	}
+	return b.completions.waiters[strings.TrimSpace(runID)]
+}
+
+func (b *Backend) ensureCompletionListener() error {
+	var setupErr error
+	b.completions.once.Do(func() {
+		socketPath := b.completionSocketPath()
+		if socketPath == "" {
+			setupErr = fmt.Errorf("empty completion socket path")
+			return
+		}
+		if err := os.MkdirAll(filepath.Dir(socketPath), 0o755); err != nil {
+			setupErr = err
+			return
+		}
+		_ = os.Remove(socketPath)
+		listener, err := net.ListenPacket("unixgram", socketPath)
+		if err != nil {
+			setupErr = err
+			return
+		}
+		b.completions.listener = listener
+		go b.serveCompletionSignals(listener)
+	})
+	if setupErr != nil {
+		return setupErr
+	}
+	if b.completions.listener == nil {
+		return fmt.Errorf("completion listener unavailable")
+	}
+	return nil
+}
+
+func (b *Backend) serveCompletionSignals(listener net.PacketConn) {
+	buffer := make([]byte, 512)
+	for {
+		n, _, err := listener.ReadFrom(buffer)
+		if err != nil {
+			return
+		}
+		runID := strings.TrimSpace(string(buffer[:n]))
+		if runID == "" {
+			continue
+		}
+		b.completions.mu.Lock()
+		waiter := b.completions.waiters[runID]
+		if waiter != nil {
+			close(waiter)
+			delete(b.completions.waiters, runID)
+		}
+		b.completions.mu.Unlock()
+	}
 }
 
 func resolvePath(repoRoot, candidate string) string {
@@ -214,25 +747,9 @@ func mapHeartbeatState(state string) (types.JobState, string) {
 		return types.JobStateFailed, "FAILED"
 	case "cancelled":
 		return types.JobStateCancelled, "CANCELLED"
+	case "timed_out", "timeout":
+		return types.JobStateTimedOut, "TIMEOUT"
 	default:
 		return "", ""
 	}
-}
-
-func brokerRunRoot(job types.Job) string {
-	if job.Request.TaskParams != nil {
-		if value, ok := job.Request.TaskParams["_broker_run_root"].(string); ok && value != "" {
-			return value
-		}
-	}
-	return ".broker/runs"
-}
-
-func brokerRepoRoot(job types.Job) string {
-	if job.Request.TaskParams != nil {
-		if value, ok := job.Request.TaskParams["_broker_repo_root"].(string); ok && value != "" {
-			return value
-		}
-	}
-	return "."
 }

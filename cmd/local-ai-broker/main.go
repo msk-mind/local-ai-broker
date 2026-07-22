@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/msk-mind/local-ai-broker/broker/pkg/types"
@@ -25,6 +27,8 @@ var (
 	commit  = "unknown"
 	date    = "unknown"
 )
+
+const brokerServerShutdownTimeout = 45 * time.Second
 
 type commandError struct {
 	message string
@@ -81,6 +85,7 @@ Usage:
   local-ai-broker init [--local|--slurm] [--output PATH] [flags]
   local-ai-broker doctor [--local|--slurm] [--config PATH]
   local-ai-broker install codex [--local|--slurm|--all] [--codex-home PATH]
+  local-ai-broker install copilot [--local|--slurm|--all] [--copilot-home PATH] [--bin-dir PATH] [--copilot-bin PATH]
   local-ai-broker install binaries [--bin-dir PATH]
   local-ai-broker up [--local|--slurm] [--listen-addr ADDR] [--config PATH] [--env-file PATH]
   local-ai-broker version
@@ -187,14 +192,18 @@ func runInit(args []string) error {
 	partitionCPU := fs.String("partition-cpu", "cpu", "Slurm CPU partition")
 	partitionGPU := fs.String("partition-gpu", "hpc", "shared Slurm GPU partition")
 	partitionP40 := fs.String("partition-p40", "", "legacy tier-specific P40 partition override")
+	partitionV100 := fs.String("partition-v100", "", "tier-specific V100 partition override")
 	partitionA100 := fs.String("partition-a100", "", "legacy tier-specific A100 partition override")
 	gpuRequestMode := fs.String("gpu-request-mode", "gres", "Slurm GPU request mode: gres or gpus")
 	gpuTypeP40 := fs.String("gpu-type-p40", "p40", "Slurm GPU type for the P40 compression tier")
+	gpuTypeV100 := fs.String("gpu-type-v100", "v100", "Slurm GPU type for the V100 reasoning tier")
 	gpuTypeA100 := fs.String("gpu-type-a100", "a100", "Slurm GPU type for the A100 reasoning tier")
 	nodelistP40 := fs.String("nodelist-p40", "pllimsksparky[1-4]", "Slurm P40 nodelist")
+	nodelistV100 := fs.String("nodelist-v100", "", "Slurm V100 nodelist")
 	constraintP40 := fs.String("constraint-p40", "", "Slurm P40 constraint")
-	modelP40 := fs.String("model-p40", "gpt-oss-20b.p40", "default P40 model profile")
-	modelA100 := fs.String("model-a100", "qwen3-coder-30b.a100", "default A100 model profile")
+	constraintV100 := fs.String("constraint-v100", "", "Slurm V100 constraint")
+	modelP40 := fs.String("model-p40", "", "legacy P40 task model profile (operator supplied)")
+	modelA100 := fs.String("model-a100", "", "legacy A100 task model profile (operator supplied)")
 	if err := fs.Parse(args); err != nil {
 		return commandError{message: err.Error(), code: 2}
 	}
@@ -241,17 +250,36 @@ func runInit(args []string) error {
 			PartitionCPU:   *partitionCPU,
 			PartitionGPU:   *partitionGPU,
 			PartitionP40:   *partitionP40,
+			PartitionV100:  *partitionV100,
 			PartitionA100:  *partitionA100,
 			GPURequestMode: *gpuRequestMode,
 			GPUTypeP40:     *gpuTypeP40,
+			GPUTypeV100:    *gpuTypeV100,
 			GPUTypeA100:    *gpuTypeA100,
 			NodeListP40:    *nodelistP40,
+			NodeListV100:   *nodelistV100,
 			ConstraintP40:  *constraintP40,
+			ConstraintV100: *constraintV100,
 			ModelP40:       *modelP40,
 			ModelA100:      *modelA100,
 		}
 		cfg.Runtime = runtimeBootstrapConfig{
 			LlamaCPPTimeoutSeconds: 20,
+		}
+		cfg.GPUServices = gpuServicesBootstrapConfig{
+			Enabled:                 false,
+			RegistryPath:            "__REPO_ROOT__/.broker/gpu-services.json",
+			ControlRequestDir:       "__REPO_ROOT__/.broker/gpu-services.json.requests",
+			ScriptPath:              "__REPO_ROOT__/deploy/slurm/gpu_service.slurm",
+			LeaseDurationSeconds:    4 * 60 * 60,
+			HealthIntervalSeconds:   15,
+			HeartbeatTimeoutSeconds: 45,
+			StartupTimeoutSeconds:   10 * 60,
+			P40Retrieval:            gpuServiceDeploymentBootstrapConfig{MinReplicas: 1, MaxReplicas: 2},
+			P40Synthesis:            gpuServiceDeploymentBootstrapConfig{MinReplicas: 1, MaxReplicas: 2},
+			V100Reasoning:           gpuServiceDeploymentBootstrapConfig{MinReplicas: 0, MaxReplicas: 1},
+			A100Single:              gpuServiceDeploymentBootstrapConfig{MinReplicas: 0, MaxReplicas: 1},
+			A100Multigpu:            gpuServiceDeploymentBootstrapConfig{MinReplicas: 0, MaxReplicas: 1},
 		}
 		cfg.Parallel = parallelBootstrapConfig{
 			MaxBatchSize:         32,
@@ -350,12 +378,49 @@ func runDoctor(args []string) error {
 		if !checkPath(slurmScript, true) {
 			failures++
 		}
+		if strings.EqualFold(envMap["BROKER_GPU_SERVICE_ENABLED"], "true") {
+			if !checkExecutable("python3", true) {
+				failures++
+			}
+			gpuScript := envMap["BROKER_GPU_SERVICE_SCRIPT_PATH"]
+			if !checkPath(gpuScript, true) {
+				failures++
+			}
+			if err := validateGPUServiceEnvMap(envMap); err != nil {
+				reportCheck("gpu-service-config", err.Error(), false)
+				failures++
+			} else {
+				reportCheck("gpu-service-config", "all five deployment profiles configured", true)
+			}
+		}
 	}
 	codexHome := defaultCodexHome()
 	if profileExists(filepath.Join(codexHome, "local-broker.config.toml")) || profileExists(filepath.Join(codexHome, "slurm-broker.config.toml")) {
 		reportCheck("codex-profiles", codexHome, true)
 	} else {
 		reportCheck("codex-profiles", "not installed under "+codexHome, false)
+		warnings++
+	}
+
+	copilotHome := defaultCopilotHome()
+	profilesDir := filepath.Join(copilotHome, "profiles")
+	userBinDir := defaultUserBinDir()
+	copilotProfilesOK := profileExists(filepath.Join(profilesDir, "local-broker.mcp-config.json")) || profileExists(filepath.Join(profilesDir, "slurm-broker.mcp-config.json"))
+	copilotWrappersOK := profileExists(filepath.Join(userBinDir, "copilot-local-broker")) || profileExists(filepath.Join(userBinDir, "copilot-slurm-broker"))
+	if copilotProfilesOK && copilotWrappersOK {
+		reportCheck("copilot-profiles", profilesDir, true)
+		reportCheck("copilot-wrappers", userBinDir, true)
+	} else {
+		if !copilotProfilesOK {
+			reportCheck("copilot-profiles", "not installed under "+profilesDir, false)
+		} else {
+			reportCheck("copilot-profiles", profilesDir, true)
+		}
+		if !copilotWrappersOK {
+			reportCheck("copilot-wrappers", "not installed under "+userBinDir, false)
+		} else {
+			reportCheck("copilot-wrappers", userBinDir, true)
+		}
 		warnings++
 	}
 
@@ -366,13 +431,44 @@ func runDoctor(args []string) error {
 	return nil
 }
 
+func validateGPUServiceEnvMap(envMap map[string]string) error {
+	for _, key := range []string{
+		"BROKER_GPU_SERVICE_REGISTRY_PATH",
+		"BROKER_GPU_SERVICE_CONTROL_REQUEST_DIR",
+		"BROKER_GPU_SERVICE_CONTROL_TOKEN",
+		"BROKER_GPU_SERVICE_SCRIPT_PATH",
+		"BROKER_SLURM_GPU_TYPE_P40",
+		"BROKER_SLURM_GPU_TYPE_V100",
+		"BROKER_SLURM_GPU_TYPE_A100",
+	} {
+		if strings.TrimSpace(envMap[key]) == "" {
+			return fmt.Errorf("%s is required", key)
+		}
+	}
+	for _, tier := range []string{"P40_RETRIEVAL", "P40_SYNTHESIS", "V100_REASONING", "A100_SINGLE", "A100_MULTIGPU"} {
+		prefix := "BROKER_GPU_SERVICE_" + tier + "_"
+		for _, suffix := range []string{"PROFILE", "MODEL_PATH", "QUANTIZATION", "CONTEXT_LIMIT_TOKENS", "RUNTIME", "RUNTIME_ARGS_JSON", "MAX_REPLICAS"} {
+			if strings.TrimSpace(envMap[prefix+suffix]) == "" {
+				return fmt.Errorf("%s%s is required", prefix, suffix)
+			}
+		}
+		var args []string
+		if err := json.Unmarshal([]byte(envMap[prefix+"RUNTIME_ARGS_JSON"]), &args); err != nil || len(args) == 0 {
+			return fmt.Errorf("%sRUNTIME_ARGS_JSON must be a non-empty JSON string array", prefix)
+		}
+	}
+	return nil
+}
+
 func runInstall(args []string) error {
 	if len(args) == 0 {
-		return commandError{message: "usage: local-ai-broker install <codex|binaries> ...", code: 2}
+		return commandError{message: "usage: local-ai-broker install <codex|copilot|binaries> ...", code: 2}
 	}
 	switch args[0] {
 	case "codex":
 		return runInstallCodex(args[1:])
+	case "copilot":
+		return runInstallCopilot(args[1:])
 	case "binaries":
 		return runInstallBinaries(args[1:])
 	default:
@@ -426,6 +522,68 @@ func runInstallCodex(args []string) error {
 	if mode == "slurm" || mode == "all" {
 		fmt.Println("  codex -p slurm-broker")
 	}
+	return nil
+}
+
+func runInstallCopilot(args []string) error {
+	fs := flag.NewFlagSet("install copilot", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	localMode := fs.Bool("local", false, "install only the local profile")
+	slurmMode := fs.Bool("slurm", false, "install only the Slurm profile")
+	allMode := fs.Bool("all", false, "install both profiles")
+	copilotHome := fs.String("copilot-home", defaultCopilotHome(), "target Copilot config directory (profiles written here)")
+	binDir := fs.String("bin-dir", defaultUserBinDir(), "directory to write copilot-local-broker and copilot-slurm-broker wrapper scripts")
+	copilotBin := fs.String("copilot-bin", defaultCopilotBin(), "path to the copilot binary used in wrapper scripts")
+	if err := fs.Parse(args); err != nil {
+		return commandError{message: err.Error(), code: 2}
+	}
+	repoRoot, err := findRepoRoot()
+	if err != nil {
+		return err
+	}
+	mode := "all"
+	if *localMode || *slurmMode || *allMode {
+		switch {
+		case *localMode:
+			mode = "local"
+		case *slurmMode:
+			mode = "slurm"
+		default:
+			mode = "all"
+		}
+	}
+	profilesDir := filepath.Join(*copilotHome, "profiles")
+	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(*binDir, 0o755); err != nil {
+		return err
+	}
+	if mode == "local" || mode == "all" {
+		if err := installCopilotProfile(repoRoot, profilesDir, "local-broker.mcp-config.json.template", "local-broker.mcp-config.json"); err != nil {
+			return err
+		}
+		if err := installCopilotWrapper(*binDir, *copilotBin, repoRoot, "copilot-local-broker.sh.template", "copilot-local-broker"); err != nil {
+			return err
+		}
+	}
+	if mode == "slurm" || mode == "all" {
+		if err := installCopilotProfile(repoRoot, profilesDir, "slurm-broker.mcp-config.json.template", "slurm-broker.mcp-config.json"); err != nil {
+			return err
+		}
+		if err := installCopilotWrapper(*binDir, *copilotBin, repoRoot, "copilot-slurm-broker.sh.template", "copilot-slurm-broker"); err != nil {
+			return err
+		}
+	}
+	fmt.Println("Installed Copilot broker profile(s).")
+	fmt.Println("Use:")
+	if mode == "local" || mode == "all" {
+		fmt.Printf("  copilot-local-broker\n")
+	}
+	if mode == "slurm" || mode == "all" {
+		fmt.Printf("  copilot-slurm-broker\n")
+	}
+	fmt.Printf("(ensure %s is in your PATH)\n", *binDir)
 	return nil
 }
 
@@ -546,35 +704,70 @@ func runUp(args []string) error {
 	if err := os.MkdirAll(filepath.Dir(envMap["BROKER_AUDIT_LOG_PATH"]), 0o755); err != nil {
 		return err
 	}
-	goBin, err := exec.LookPath("go")
+	cmd, cleanup, err := brokerServerCommand(repoRoot, envMap)
 	if err != nil {
-		return commandError{message: "missing required executable: go", code: 1}
+		return err
 	}
-	cmd := exec.Command(goBin, "run", "./broker/cmd/broker-server")
-	cmd.Dir = repoRoot
+	defer cleanup()
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = mergeEnv(envMap)
 	fmt.Printf("starting broker-server in %s mode from %s\n", mode, repoRoot)
-	return cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	select {
+	case err := <-waitCh:
+		return err
+	case sig := <-sigCh:
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(sig)
+		}
+		select {
+		case err := <-waitCh:
+			if err == nil {
+				return nil
+			}
+			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 0 {
+				return nil
+			}
+			return err
+		case <-time.After(brokerServerShutdownTimeout):
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			<-waitCh
+			return commandError{message: "timed out waiting for broker-server shutdown", code: 1}
+		}
+	}
 }
 
 type bootstrapConfig struct {
-	ListenAddr      string                  `json:"listen_addr"`
-	JobStorePath    string                  `json:"job_store_path"`
-	RunRootPath     string                  `json:"run_root_path"`
-	RepoRootPath    string                  `json:"repo_root_path"`
-	AuditLogPath    string                  `json:"audit_log_path"`
-	AuditVerifyMode string                  `json:"audit_verify_mode"`
-	AuthMode        string                  `json:"auth_mode"`
-	MCPActor        string                  `json:"mcp_actor"`
-	MCPRole         string                  `json:"mcp_role"`
-	Backend         string                  `json:"backend"`
-	Local           localBootstrapConfig    `json:"local"`
-	Slurm           slurmBootstrapConfig    `json:"slurm"`
-	Runtime         runtimeBootstrapConfig  `json:"runtime"`
-	Parallel        parallelBootstrapConfig `json:"parallel"`
+	ListenAddr      string                     `json:"listen_addr"`
+	JobStorePath    string                     `json:"job_store_path"`
+	RunRootPath     string                     `json:"run_root_path"`
+	RepoRootPath    string                     `json:"repo_root_path"`
+	AuditLogPath    string                     `json:"audit_log_path"`
+	AuditVerifyMode string                     `json:"audit_verify_mode"`
+	AuthMode        string                     `json:"auth_mode"`
+	MCPActor        string                     `json:"mcp_actor"`
+	MCPRole         string                     `json:"mcp_role"`
+	Backend         string                     `json:"backend"`
+	Local           localBootstrapConfig       `json:"local"`
+	Slurm           slurmBootstrapConfig       `json:"slurm"`
+	Runtime         runtimeBootstrapConfig     `json:"runtime"`
+	GPUServices     gpuServicesBootstrapConfig `json:"gpu_services"`
+	Parallel        parallelBootstrapConfig    `json:"parallel"`
 }
 
 type localBootstrapConfig struct {
@@ -587,23 +780,56 @@ type slurmBootstrapConfig struct {
 	SubmitCmd      string `json:"submit_cmd"`
 	StatusCmd      string `json:"status_cmd"`
 	CancelCmd      string `json:"cancel_cmd"`
+	InfoCmd        string `json:"info_cmd"`
 	ScriptPath     string `json:"script_path"`
 	PartitionCPU   string `json:"partition_cpu"`
 	PartitionGPU   string `json:"partition_gpu"`
 	PartitionP40   string `json:"partition_p40"`
+	PartitionV100  string `json:"partition_v100"`
 	PartitionA100  string `json:"partition_a100"`
 	GPURequestMode string `json:"gpu_request_mode"`
 	GPUTypeP40     string `json:"gpu_type_p40"`
+	GPUTypeV100    string `json:"gpu_type_v100"`
 	GPUTypeA100    string `json:"gpu_type_a100"`
 	NodeListCPU    string `json:"nodelist_cpu"`
 	NodeListP40    string `json:"nodelist_p40"`
+	NodeListV100   string `json:"nodelist_v100"`
 	NodeListA100   string `json:"nodelist_a100"`
 	ConstraintCPU  string `json:"constraint_cpu"`
 	ConstraintP40  string `json:"constraint_p40"`
+	ConstraintV100 string `json:"constraint_v100"`
 	ConstraintA100 string `json:"constraint_a100"`
 	ModelCPU       string `json:"model_profile_cpu"`
 	ModelP40       string `json:"model_profile_p40"`
 	ModelA100      string `json:"model_profile_a100"`
+}
+
+type gpuServicesBootstrapConfig struct {
+	Enabled                 bool                                `json:"enabled"`
+	RegistryPath            string                              `json:"registry_path"`
+	ControlToken            string                              `json:"control_token"`
+	ControlRequestDir       string                              `json:"control_request_dir"`
+	ScriptPath              string                              `json:"script_path"`
+	LeaseDurationSeconds    int                                 `json:"lease_duration_seconds"`
+	HealthIntervalSeconds   int                                 `json:"health_interval_seconds"`
+	HeartbeatTimeoutSeconds int                                 `json:"heartbeat_timeout_seconds"`
+	StartupTimeoutSeconds   int                                 `json:"startup_timeout_seconds"`
+	P40Retrieval            gpuServiceDeploymentBootstrapConfig `json:"p40_retrieval"`
+	P40Synthesis            gpuServiceDeploymentBootstrapConfig `json:"p40_synthesis"`
+	V100Reasoning           gpuServiceDeploymentBootstrapConfig `json:"v100_reasoning"`
+	A100Single              gpuServiceDeploymentBootstrapConfig `json:"a100_single"`
+	A100Multigpu            gpuServiceDeploymentBootstrapConfig `json:"a100_multigpu"`
+}
+
+type gpuServiceDeploymentBootstrapConfig struct {
+	Profile            string `json:"profile"`
+	ModelPath          string `json:"model_path"`
+	Quantization       string `json:"quantization"`
+	ContextLimitTokens int    `json:"context_limit_tokens"`
+	Runtime            string `json:"runtime"`
+	RuntimeArgsJSON    string `json:"runtime_args_json"`
+	MinReplicas        int    `json:"min_replicas"`
+	MaxReplicas        int    `json:"max_replicas"`
 }
 
 type runtimeBootstrapConfig struct {
@@ -657,6 +883,7 @@ func looksLikeRepoRoot(path string) bool {
 		"go.mod",
 		filepath.Join("broker", "cmd", "broker-server", "main.go"),
 		filepath.Join("examples", "mcp-clients", "codex-profiles", "local-broker.config.toml.template"),
+		filepath.Join("examples", "mcp-clients", "copilot-profiles", "local-broker.mcp-config.json.template"),
 	} {
 		if _, err := os.Stat(filepath.Join(path, rel)); err != nil {
 			return false
@@ -701,23 +928,44 @@ func loadBootstrapConfig(repoRoot, path string) (map[string]string, error) {
 	set("BROKER_SLURM_SUBMIT_CMD", cfg.Slurm.SubmitCmd, false)
 	set("BROKER_SLURM_STATUS_CMD", cfg.Slurm.StatusCmd, false)
 	set("BROKER_SLURM_CANCEL_CMD", cfg.Slurm.CancelCmd, false)
+	set("BROKER_SLURM_INFO_CMD", cfg.Slurm.InfoCmd, false)
 	set("BROKER_SLURM_SCRIPT_PATH", cfg.Slurm.ScriptPath, true)
 	set("BROKER_SLURM_PARTITION_CPU", cfg.Slurm.PartitionCPU, false)
 	set("BROKER_SLURM_PARTITION_GPU", cfg.Slurm.PartitionGPU, false)
 	set("BROKER_SLURM_PARTITION_P40", cfg.Slurm.PartitionP40, false)
+	set("BROKER_SLURM_PARTITION_V100", cfg.Slurm.PartitionV100, false)
 	set("BROKER_SLURM_PARTITION_A100", cfg.Slurm.PartitionA100, false)
 	set("BROKER_SLURM_GPU_REQUEST_MODE", cfg.Slurm.GPURequestMode, false)
 	set("BROKER_SLURM_GPU_TYPE_P40", cfg.Slurm.GPUTypeP40, false)
+	set("BROKER_SLURM_GPU_TYPE_V100", cfg.Slurm.GPUTypeV100, false)
 	set("BROKER_SLURM_GPU_TYPE_A100", cfg.Slurm.GPUTypeA100, false)
 	set("BROKER_SLURM_NODELIST_CPU", cfg.Slurm.NodeListCPU, false)
 	set("BROKER_SLURM_NODELIST_P40", cfg.Slurm.NodeListP40, false)
+	set("BROKER_SLURM_NODELIST_V100", cfg.Slurm.NodeListV100, false)
 	set("BROKER_SLURM_NODELIST_A100", cfg.Slurm.NodeListA100, false)
 	set("BROKER_SLURM_CONSTRAINT_CPU", cfg.Slurm.ConstraintCPU, false)
 	set("BROKER_SLURM_CONSTRAINT_P40", cfg.Slurm.ConstraintP40, false)
+	set("BROKER_SLURM_CONSTRAINT_V100", cfg.Slurm.ConstraintV100, false)
 	set("BROKER_SLURM_CONSTRAINT_A100", cfg.Slurm.ConstraintA100, false)
 	set("BROKER_MODEL_PROFILE_CPU", cfg.Slurm.ModelCPU, false)
 	set("BROKER_MODEL_PROFILE_P40", cfg.Slurm.ModelP40, false)
 	set("BROKER_MODEL_PROFILE_A100", cfg.Slurm.ModelA100, false)
+	if cfg.GPUServices.Enabled {
+		envMap["BROKER_GPU_SERVICE_ENABLED"] = "true"
+	}
+	set("BROKER_GPU_SERVICE_REGISTRY_PATH", cfg.GPUServices.RegistryPath, true)
+	set("BROKER_GPU_SERVICE_CONTROL_TOKEN", cfg.GPUServices.ControlToken, false)
+	set("BROKER_GPU_SERVICE_CONTROL_REQUEST_DIR", cfg.GPUServices.ControlRequestDir, true)
+	set("BROKER_GPU_SERVICE_SCRIPT_PATH", cfg.GPUServices.ScriptPath, true)
+	setPositiveIntEnv(envMap, "BROKER_GPU_SERVICE_LEASE_DURATION_SECONDS", cfg.GPUServices.LeaseDurationSeconds)
+	setPositiveIntEnv(envMap, "BROKER_GPU_SERVICE_HEALTH_INTERVAL_SECONDS", cfg.GPUServices.HealthIntervalSeconds)
+	setPositiveIntEnv(envMap, "BROKER_GPU_SERVICE_HEARTBEAT_TIMEOUT_SECONDS", cfg.GPUServices.HeartbeatTimeoutSeconds)
+	setPositiveIntEnv(envMap, "BROKER_GPU_SERVICE_STARTUP_TIMEOUT_SECONDS", cfg.GPUServices.StartupTimeoutSeconds)
+	setGPUServiceDeploymentEnv(envMap, "P40_RETRIEVAL", cfg.GPUServices.P40Retrieval)
+	setGPUServiceDeploymentEnv(envMap, "P40_SYNTHESIS", cfg.GPUServices.P40Synthesis)
+	setGPUServiceDeploymentEnv(envMap, "V100_REASONING", cfg.GPUServices.V100Reasoning)
+	setGPUServiceDeploymentEnv(envMap, "A100_SINGLE", cfg.GPUServices.A100Single)
+	setGPUServiceDeploymentEnv(envMap, "A100_MULTIGPU", cfg.GPUServices.A100Multigpu)
 	set("BROKER_RUNTIME_LLAMACPP_BASE_URL", cfg.Runtime.LlamaCPPBaseURL, false)
 	set("BROKER_RUNTIME_VLLM_BASE_URL", cfg.Runtime.VLLMBaseURL, false)
 	set("BROKER_RUNTIME_SGLANG_BASE_URL", cfg.Runtime.SGLangBaseURL, false)
@@ -745,6 +993,33 @@ func loadBootstrapConfig(repoRoot, path string) (map[string]string, error) {
 	return envMap, nil
 }
 
+func setPositiveIntEnv(envMap map[string]string, key string, value int) {
+	if value > 0 {
+		envMap[key] = fmt.Sprintf("%d", value)
+	}
+}
+
+func setGPUServiceDeploymentEnv(envMap map[string]string, name string, deployment gpuServiceDeploymentBootstrapConfig) {
+	prefix := "BROKER_GPU_SERVICE_" + name + "_"
+	values := map[string]string{
+		"PROFILE":           deployment.Profile,
+		"MODEL_PATH":        deployment.ModelPath,
+		"QUANTIZATION":      deployment.Quantization,
+		"RUNTIME":           deployment.Runtime,
+		"RUNTIME_ARGS_JSON": deployment.RuntimeArgsJSON,
+	}
+	for suffix, value := range values {
+		if strings.TrimSpace(value) != "" {
+			envMap[prefix+suffix] = value
+		}
+	}
+	setPositiveIntEnv(envMap, prefix+"CONTEXT_LIMIT_TOKENS", deployment.ContextLimitTokens)
+	if deployment.MinReplicas >= 0 {
+		envMap[prefix+"MIN_REPLICAS"] = fmt.Sprintf("%d", deployment.MinReplicas)
+	}
+	setPositiveIntEnv(envMap, prefix+"MAX_REPLICAS", deployment.MaxReplicas)
+}
+
 func writeBootstrapConfig(path string, cfg bootstrapConfig) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -754,21 +1029,19 @@ func writeBootstrapConfig(path string, cfg bootstrapConfig) error {
 		return err
 	}
 	content = append(content, '\n')
-	return os.WriteFile(path, content, 0o644)
+	return os.WriteFile(path, content, 0o600)
 }
 
 func startBrokerServerProcess(repoRoot string, envMap map[string]string) (*exec.Cmd, *bytes.Buffer, error) {
-	goBin, err := exec.LookPath("go")
+	cmd, cleanup, err := brokerServerCommand(repoRoot, envMap)
 	if err != nil {
-		return nil, nil, commandError{message: "missing required executable: go", code: 1}
+		return nil, nil, err
 	}
-	cmd := exec.Command(goBin, "run", "./broker/cmd/broker-server")
-	cmd.Dir = repoRoot
-	cmd.Stdout = io.Discard
 	stderrBuf := &bytes.Buffer{}
+	cmd.Stdout = io.Discard
 	cmd.Stderr = stderrBuf
-	cmd.Env = mergeEnv(envMap)
 	if err := cmd.Start(); err != nil {
+		cleanup()
 		return nil, nil, err
 	}
 	return cmd, stderrBuf, nil
@@ -781,15 +1054,59 @@ func stopProcess(cmd *exec.Cmd) {
 	_ = cmd.Process.Signal(os.Interrupt)
 	done := make(chan struct{})
 	go func() {
-		_, _ = cmd.Process.Wait()
+		_ = cmd.Wait()
 		close(done)
 	}()
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(brokerServerShutdownTimeout):
 		_ = cmd.Process.Kill()
 		<-done
 	}
+	_ = os.RemoveAll(filepath.Dir(cmd.Path))
+}
+
+func brokerServerCommand(repoRoot string, envMap map[string]string) (*exec.Cmd, func(), error) {
+	binaryPath, cleanup, err := buildBrokerServerBinary(repoRoot)
+	if err != nil {
+		return nil, nil, err
+	}
+	cmd := exec.Command(binaryPath)
+	cmd.Dir = repoRoot
+	cmd.Env = mergeEnv(envMap)
+	return cmd, cleanup, nil
+}
+
+func buildBrokerServerBinary(repoRoot string) (string, func(), error) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		return "", nil, commandError{message: "missing required executable: go", code: 1}
+	}
+	tempDir, err := os.MkdirTemp("", "local-ai-broker-server.")
+	if err != nil {
+		return "", nil, err
+	}
+	binaryPath := filepath.Join(tempDir, "broker-server")
+	build := exec.Command(goBin, "build", "-o", binaryPath, "./broker/cmd/broker-server")
+	build.Dir = repoRoot
+	build.Stdout = io.Discard
+	var stderr bytes.Buffer
+	build.Stderr = &stderr
+	build.Env = mergeEnv(map[string]string{
+		"CGO_ENABLED": "0",
+	})
+	if err := build.Run(); err != nil {
+		_ = os.RemoveAll(tempDir)
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return "", nil, fmt.Errorf("build broker-server: %w: %s", err, detail)
+		}
+		return "", nil, fmt.Errorf("build broker-server: %w", err)
+	}
+	cleanup := func() {
+		_ = os.RemoveAll(tempDir)
+	}
+	return binaryPath, cleanup, nil
 }
 
 func pickFreeLoopbackAddr() (string, error) {
@@ -1113,6 +1430,68 @@ func defaultCodexHome() string {
 		return ".codex"
 	}
 	return filepath.Join(home, ".codex")
+}
+
+func defaultCopilotHome() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".copilot"
+	}
+	return filepath.Join(home, ".copilot")
+}
+
+func defaultUserBinDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "bin"
+	}
+	return filepath.Join(home, "bin")
+}
+
+func defaultCopilotBin() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "copilot"
+	}
+	candidate := filepath.Join(home, "bin", "copilot")
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+	if path, err := exec.LookPath("copilot"); err == nil {
+		return path
+	}
+	return candidate
+}
+
+func installCopilotProfile(repoRoot, profilesDir, templateName, outputName string) error {
+	templatePath := filepath.Join(repoRoot, "examples", "mcp-clients", "copilot-profiles", templateName)
+	content, err := os.ReadFile(templatePath)
+	if err != nil {
+		return err
+	}
+	rendered := strings.ReplaceAll(string(content), "__REPO_ROOT__", repoRoot)
+	outputPath := filepath.Join(profilesDir, outputName)
+	if err := os.WriteFile(outputPath, []byte(rendered), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("installed %s\n", outputPath)
+	return nil
+}
+
+func installCopilotWrapper(binDir, copilotBin, repoRoot, templateName, outputName string) error {
+	templatePath := filepath.Join(repoRoot, "examples", "mcp-clients", "copilot-profiles", templateName)
+	content, err := os.ReadFile(templatePath)
+	if err != nil {
+		return err
+	}
+	rendered := strings.ReplaceAll(string(content), "__COPILOT_BIN__", copilotBin)
+	rendered = strings.ReplaceAll(rendered, "__REPO_ROOT__", repoRoot)
+	outputPath := filepath.Join(binDir, outputName)
+	if err := os.WriteFile(outputPath, []byte(rendered), 0o755); err != nil {
+		return err
+	}
+	fmt.Printf("installed %s\n", outputPath)
+	return nil
 }
 
 func profileExists(path string) bool {

@@ -21,6 +21,12 @@ done
 echo "==> smoke_command_mode.sh"
 bash "${SCRIPT_DIR}/smoke_command_mode.sh"
 
+echo "==> smoke_inspect_repo_perf_proof.sh"
+bash "${SCRIPT_DIR}/smoke_inspect_repo_perf_proof.sh"
+
+echo "==> smoke_inspect_repo_direct_default.sh"
+bash "${SCRIPT_DIR}/smoke_inspect_repo_direct_default.sh"
+
 if [ "${WITH_LOOPBACK_BIND}" -eq 1 ]; then
   echo "==> smoke_rag_llamacpp_runtime.sh"
   bash "${SCRIPT_DIR}/smoke_rag_llamacpp_runtime.sh"

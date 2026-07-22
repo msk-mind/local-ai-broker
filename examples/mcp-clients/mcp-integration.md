@@ -65,6 +65,18 @@ The broker currently exposes these MCP tools:
 - `cancel_job`
 - `list_local_capabilities`
 
+For agents that should wait on broker-backed Slurm work instead of submitting and continuing, the submit-style tools also accept:
+
+- `wait_for_result: true`
+- optional `max_wait_seconds`
+- optional `poll_interval_ms`
+
+With `wait_for_result: true`, the MCP server polls broker status internally and returns the released result envelope directly instead of only the initial `job_id` submission response.
+
+For Codex, this should be the default for non-trivial broker work because the released envelope contains answer-oriented summary fields alongside the underlying evidence.
+
+When the released payload includes `answer_brief`, `findings`, `recommended_next_action`, or `usage_guidance`, the agent should use those fields as the primary synthesis layer and still cite the referenced files when making claims.
+
 ## Development Mode
 
 For local or demo use:
@@ -119,6 +131,13 @@ codex -p local-broker
 ```
 
 The `slurm-broker` profile targets the Slurm-backed P40 tier.
+
+When `configs/broker/cdsi-live.env` is present, the launcher loads it for
+Slurm profiles so inspect-repo jobs receive the GPU-service registry and
+control-plane settings. If a service lease is stale or its endpoint dies, the
+worker can request a replacement service instead of permanently falling back
+to lexical retrieval. Restart the MCP process after changing this file or the
+profile.
 The `local-broker` profile targets the local command backend on the current machine.
 
 When one of these profiles is active, Codex starts its own stdio MCP broker process.

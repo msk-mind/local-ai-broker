@@ -9,16 +9,26 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/msk-mind/local-ai-broker/broker/pkg/auth"
+	"github.com/msk-mind/local-ai-broker/broker/pkg/gpuservice"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/service"
+	"github.com/msk-mind/local-ai-broker/broker/pkg/tasks"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/types"
 )
 
 const protocolVersion = "2025-11-25"
 
+const (
+	defaultWaitForResultMax = 15 * time.Minute
+	defaultWaitPollInterval = 50 * time.Millisecond
+	minimumWaitPollInterval = 10 * time.Millisecond
+)
+
 type Server struct {
 	service          *service.Service
+	gpuCapabilities  func(context.Context) (any, error)
 	defaultPrincipal auth.Principal
 	mu               sync.RWMutex
 	sessionPrincipal auth.Principal
@@ -32,8 +42,17 @@ const (
 )
 
 func NewServer(svc *service.Service, defaultPrincipal auth.Principal) *Server {
+	return NewServerWithGPUCapabilities(svc, defaultPrincipal, nil)
+}
+
+func NewServerWithGPUCapabilities(
+	svc *service.Service,
+	defaultPrincipal auth.Principal,
+	provider func(context.Context) (any, error),
+) *Server {
 	return &Server{
 		service:          svc,
+		gpuCapabilities:  provider,
 		defaultPrincipal: defaultPrincipal,
 	}
 }
@@ -67,6 +86,24 @@ type initializeParams struct {
 		Actor string `json:"actor"`
 		Role  string `json:"role"`
 	} `json:"auth,omitempty"`
+}
+
+type waitForResultOptions struct {
+	WaitForResult  bool `json:"wait_for_result,omitempty"`
+	MaxWaitSeconds int  `json:"max_wait_seconds,omitempty"`
+	PollIntervalMS int  `json:"poll_interval_ms,omitempty"`
+}
+
+type toolDefinition struct {
+	name        string
+	description string
+	inputSchema map[string]any
+}
+
+type fetchJobLogsArgs struct {
+	JobID    string `json:"job_id"`
+	Stream   string `json:"stream"`
+	MaxBytes int    `json:"max_bytes"`
 }
 
 func (s *Server) ServeStdio(ctx context.Context, in io.Reader, out io.Writer) error {
@@ -127,6 +164,24 @@ func (s *Server) handleRequest(ctx context.Context, req request) response {
 					"listChanged": false,
 				},
 			},
+			"instructions": `When this broker is active, use the local-ai-compute-broker MCP server by default for compute-intensive and context-heavy work.
+
+Use broker tools first for:
+- repository inspection
+- log analysis
+- retrieval/compression of local context
+- local debugging passes over code or logs
+- patch-oriented investigation when broker evidence is useful
+- submitting jobs to local or cluster compute
+
+Prefer inspect_repo, summarize_logs, debug_with_local_context, rag_compress, and propose_patch over direct ad hoc repository inspection when the task can be broker-mediated.
+
+Only skip the broker when:
+- the task is trivial and does not benefit from local retrieval or compression
+- the broker is unavailable
+- the broker result is degraded, non-authoritative, or clearly insufficient for the task
+
+If the broker returns degraded retrieval quality, treat it as non-authoritative and verify directly in the repo before making strong claims.`,
 		}
 	case "ping":
 		resp.Result = map[string]any{}
@@ -224,186 +279,215 @@ func defaultRole(role string) string {
 func (s *Server) callTool(ctx context.Context, params toolsCallParams) (map[string]any, error) {
 	switch params.Name {
 	case "submit_local_job":
-		var req types.SubmitJobRequest
-		if err := json.Unmarshal(params.Arguments, &req); err != nil {
-			return nil, fmt.Errorf("invalid submit_local_job arguments")
-		}
-		resp, err := s.service.SubmitJob(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(resp), nil
+		return s.callSubmitJobTool(ctx, params.Arguments, "submit_local_job")
 	case "submit_parallel_jobs":
-		var req types.SubmitParallelJobsRequest
-		if err := json.Unmarshal(params.Arguments, &req); err != nil {
-			return nil, fmt.Errorf("invalid submit_parallel_jobs arguments")
-		}
-		resp, err := s.service.SubmitParallelJobs(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(resp), nil
+		return s.callSubmitParallelJobsTool(ctx, params.Arguments)
 	case "get_root_job_status":
-		var args struct {
-			RootJobID string `json:"root_job_id"`
-		}
-		if err := json.Unmarshal(params.Arguments, &args); err != nil || args.RootJobID == "" {
-			return nil, fmt.Errorf("invalid get_root_job_status arguments")
-		}
-		status, err := s.service.GetRootJobStatus(ctx, args.RootJobID)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(status), nil
+		return s.callStringArgTool(params.Arguments, "root_job_id", "get_root_job_status", func(rootJobID string) (any, error) {
+			return s.service.GetRootJobStatus(ctx, rootJobID)
+		})
 	case "retry_failed_root_shards":
-		var req types.RetryFailedRootShardsRequest
-		if err := json.Unmarshal(params.Arguments, &req); err != nil || strings.TrimSpace(req.RootJobID) == "" {
-			return nil, fmt.Errorf("invalid retry_failed_root_shards arguments")
-		}
-		resp, err := s.service.RetryFailedRootShards(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(resp), nil
-	case "rag_compress":
-		req, err := decodeRAGToolSubmitRequest(params.Arguments, "rag_compress", "rag_evidence_pack_v1")
-		if err != nil {
-			return nil, fmt.Errorf("invalid rag_compress arguments")
-		}
-		resp, err := s.service.SubmitJob(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(resp), nil
-	case "debug_with_local_context":
-		req, err := decodeRAGToolSubmitRequest(params.Arguments, "debug_with_local_context", "debug_evidence_pack_v1")
-		if err != nil {
-			return nil, fmt.Errorf("invalid debug_with_local_context arguments")
-		}
-		resp, err := s.service.SubmitJob(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(resp), nil
-	case "summarize_logs":
-		req, err := decodeRAGToolSubmitRequest(params.Arguments, "summarize_logs", "log_evidence_pack_v1")
-		if err != nil {
-			return nil, fmt.Errorf("invalid summarize_logs arguments")
-		}
-		resp, err := s.service.SubmitJob(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(resp), nil
-	case "inspect_repo":
-		req, err := decodeRAGToolSubmitRequest(params.Arguments, "inspect_repo", "repo_inspection_pack_v1")
-		if err != nil {
-			return nil, fmt.Errorf("invalid inspect_repo arguments")
-		}
-		resp, err := s.service.SubmitJob(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(resp), nil
-	case "propose_patch":
-		req, err := decodeRAGToolSubmitRequest(params.Arguments, "propose_patch", "patch_proposal_pack_v1")
-		if err != nil {
-			return nil, fmt.Errorf("invalid propose_patch arguments")
-		}
-		resp, err := s.service.SubmitJob(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(resp), nil
+		return callJSONTool(params.Arguments, "retry_failed_root_shards", func(req types.RetryFailedRootShardsRequest) bool {
+			return strings.TrimSpace(req.RootJobID) != ""
+		}, func(req types.RetryFailedRootShardsRequest) (any, error) {
+			return s.service.RetryFailedRootShards(ctx, req)
+		})
+	case "rag_compress", "debug_with_local_context", "summarize_logs", "inspect_repo", "propose_patch":
+		return s.callRAGTool(ctx, params.Name, params.Arguments)
 	case "release_deferred_root_chunks":
-		var req types.ReleaseDeferredRootChunksRequest
-		if err := json.Unmarshal(params.Arguments, &req); err != nil || strings.TrimSpace(req.RootJobID) == "" {
-			return nil, fmt.Errorf("invalid release_deferred_root_chunks arguments")
-		}
-		resp, err := s.service.ReleaseDeferredRootChunks(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(resp), nil
+		return callJSONTool(params.Arguments, "release_deferred_root_chunks", func(req types.ReleaseDeferredRootChunksRequest) bool {
+			return strings.TrimSpace(req.RootJobID) != ""
+		}, func(req types.ReleaseDeferredRootChunksRequest) (any, error) {
+			return s.service.ReleaseDeferredRootChunks(ctx, req)
+		})
 	case "get_job_status":
-		var args struct {
-			JobID string `json:"job_id"`
-		}
-		if err := json.Unmarshal(params.Arguments, &args); err != nil || args.JobID == "" {
-			return nil, fmt.Errorf("invalid get_job_status arguments")
-		}
-		job, err := s.service.GetJob(ctx, args.JobID)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(job), nil
+		return s.callStringArgTool(params.Arguments, "job_id", "get_job_status", func(jobID string) (any, error) {
+			return s.service.GetJob(ctx, jobID)
+		})
 	case "fetch_result":
-		var args struct {
-			JobID string `json:"job_id"`
-		}
-		if err := json.Unmarshal(params.Arguments, &args); err != nil || args.JobID == "" {
-			return nil, fmt.Errorf("invalid fetch_result arguments")
-		}
-		release, err := s.service.GetReleasedResult(ctx, args.JobID)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(release), nil
+		return s.callStringArgTool(params.Arguments, "job_id", "fetch_result", func(jobID string) (any, error) {
+			return s.service.GetReleasedResult(ctx, jobID)
+		})
 	case "get_retry_recommendation":
-		var args struct {
-			JobID string `json:"job_id"`
-		}
-		if err := json.Unmarshal(params.Arguments, &args); err != nil || args.JobID == "" {
-			return nil, fmt.Errorf("invalid get_retry_recommendation arguments")
-		}
-		rec, err := s.service.GetJobRetryRecommendation(ctx, args.JobID)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(rec), nil
+		return s.callStringArgTool(params.Arguments, "job_id", "get_retry_recommendation", func(jobID string) (any, error) {
+			return s.service.GetJobRetryRecommendation(ctx, jobID)
+		})
 	case "retry_with_recommended_profile":
-		var args struct {
-			JobID string `json:"job_id"`
-		}
-		if err := json.Unmarshal(params.Arguments, &args); err != nil || args.JobID == "" {
-			return nil, fmt.Errorf("invalid retry_with_recommended_profile arguments")
-		}
-		resp, err := s.service.RetryJobWithRecommendation(ctx, args.JobID)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(resp), nil
+		return s.callStringArgTool(params.Arguments, "job_id", "retry_with_recommended_profile", func(jobID string) (any, error) {
+			return s.service.RetryJobWithRecommendation(ctx, jobID)
+		})
 	case "fetch_job_logs":
-		var args struct {
-			JobID    string `json:"job_id"`
-			Stream   string `json:"stream"`
-			MaxBytes int    `json:"max_bytes"`
-		}
-		if err := json.Unmarshal(params.Arguments, &args); err != nil || args.JobID == "" {
-			return nil, fmt.Errorf("invalid fetch_job_logs arguments")
-		}
-		logs, err := s.service.GetJobLogs(ctx, args.JobID, args.Stream, args.MaxBytes)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(logs), nil
+		return callJSONTool(params.Arguments, "fetch_job_logs", func(args fetchJobLogsArgs) bool {
+			return strings.TrimSpace(args.JobID) != ""
+		}, func(args fetchJobLogsArgs) (any, error) {
+			return s.service.GetJobLogs(ctx, args.JobID, args.Stream, args.MaxBytes)
+		})
 	case "cancel_job":
-		var args struct {
-			JobID string `json:"job_id"`
-		}
-		if err := json.Unmarshal(params.Arguments, &args); err != nil || args.JobID == "" {
-			return nil, fmt.Errorf("invalid cancel_job arguments")
-		}
-		resp, err := s.service.CancelJob(ctx, args.JobID)
-		if err != nil {
-			return nil, err
-		}
-		return toolResult(resp), nil
+		return s.callStringArgTool(params.Arguments, "job_id", "cancel_job", func(jobID string) (any, error) {
+			return s.service.CancelJob(ctx, jobID)
+		})
 	case "list_local_capabilities":
-		return toolResult(capabilitiesPayload()), nil
+		return toolResult(s.capabilitiesPayload(ctx)), nil
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", params.Name)
 	}
+}
+
+func (s *Server) callSubmitJobTool(ctx context.Context, raw json.RawMessage, toolName string) (map[string]any, error) {
+	var req types.SubmitJobRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil, fmt.Errorf("invalid %s arguments", toolName)
+	}
+	return s.submitAndMaybeWait(ctx, raw, toolName, func(submitCtx context.Context) (types.SubmitJobResponse, error) {
+		return s.service.SubmitJob(submitCtx, req)
+	})
+}
+
+func (s *Server) callStringArgTool(raw json.RawMessage, field, toolName string, call func(string) (any, error)) (map[string]any, error) {
+	value, err := decodeRequiredStringArg(raw, field)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s arguments", toolName)
+	}
+	payload, err := call(value)
+	if err != nil {
+		return nil, err
+	}
+	return toolResult(payload), nil
+}
+
+func callJSONTool[T any](raw json.RawMessage, toolName string, valid func(T) bool, call func(T) (any, error)) (map[string]any, error) {
+	var req T
+	if err := json.Unmarshal(raw, &req); err != nil || (valid != nil && !valid(req)) {
+		return nil, fmt.Errorf("invalid %s arguments", toolName)
+	}
+	payload, err := call(req)
+	if err != nil {
+		return nil, err
+	}
+	return toolResult(payload), nil
+}
+
+func (s *Server) callSubmitParallelJobsTool(ctx context.Context, raw json.RawMessage) (map[string]any, error) {
+	var req types.SubmitParallelJobsRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil, fmt.Errorf("invalid submit_parallel_jobs arguments")
+	}
+	resp, err := s.service.SubmitParallelJobs(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return toolResult(resp), nil
+}
+
+func (s *Server) callRAGTool(ctx context.Context, toolName string, raw json.RawMessage) (map[string]any, error) {
+	spec, ok := tasks.FindSpec(toolName)
+	if !ok || spec.HTTPPath == "" {
+		return nil, fmt.Errorf("unknown tool: %s", toolName)
+	}
+	req, err := tasks.DecodeSubmitRequest(raw, spec)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s arguments: %w", toolName, err)
+	}
+	return s.submitAndMaybeWait(ctx, raw, toolName, func(submitCtx context.Context) (types.SubmitJobResponse, error) {
+		return s.service.SubmitJob(submitCtx, req)
+	})
+}
+
+func (s *Server) submitAndMaybeWait(ctx context.Context, raw json.RawMessage, toolName string, submit func(context.Context) (types.SubmitJobResponse, error)) (map[string]any, error) {
+	waitOpts, err := decodeWaitForResultOptions(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s arguments", toolName)
+	}
+	submitCtx := ctx
+	if waitOpts.WaitForResult {
+		submitCtx = service.WithPreferInlineLocalRelease(ctx)
+	}
+	resp, err := submit(submitCtx)
+	if err != nil {
+		return nil, err
+	}
+	if !waitOpts.WaitForResult {
+		return toolResult(resp), nil
+	}
+	if resp.ReleasedResult != nil {
+		return toolResult(*resp.ReleasedResult), nil
+	}
+	release, err := s.waitForReleasedResult(ctx, resp.JobID, waitOpts)
+	if err != nil {
+		return nil, err
+	}
+	return toolResult(release), nil
+}
+
+func decodeWaitForResultOptions(raw json.RawMessage) (waitForResultOptions, error) {
+	var opts waitForResultOptions
+	if len(raw) == 0 {
+		return opts, nil
+	}
+	if err := json.Unmarshal(raw, &opts); err != nil {
+		return waitForResultOptions{}, err
+	}
+	if opts.MaxWaitSeconds < 0 || opts.PollIntervalMS < 0 {
+		return waitForResultOptions{}, fmt.Errorf("wait values must be non-negative")
+	}
+	return opts, nil
+}
+
+func (s *Server) waitForReleasedResult(ctx context.Context, jobID string, opts waitForResultOptions) (types.JobResultRelease, error) {
+	maxWait := defaultWaitForResultMax
+	if opts.MaxWaitSeconds > 0 {
+		maxWait = time.Duration(opts.MaxWaitSeconds) * time.Second
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, maxWait)
+	defer cancel()
+
+	pollInterval := defaultWaitPollInterval
+	if opts.PollIntervalMS > 0 {
+		pollInterval = time.Duration(opts.PollIntervalMS) * time.Millisecond
+		if pollInterval < minimumWaitPollInterval {
+			pollInterval = minimumWaitPollInterval
+		}
+	}
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		release, err := s.service.GetReleasedResult(service.WithSkipInspectRepoResultProbe(waitCtx), jobID)
+		if err != nil {
+			return types.JobResultRelease{}, err
+		}
+		if release.Result != nil || isTerminalJobState(release.State) {
+			return release, nil
+		}
+
+		select {
+		case <-waitCtx.Done():
+			return types.JobResultRelease{}, fmt.Errorf("timed out waiting for job %q result", jobID)
+		case <-ticker.C:
+		}
+	}
+}
+
+func isTerminalJobState(state types.JobState) bool {
+	switch state {
+	case types.JobStateSucceeded, types.JobStateFailed, types.JobStateCancelled, types.JobStatePreempted, types.JobStateTimedOut:
+		return true
+	default:
+		return false
+	}
+}
+
+func decodeRequiredStringArg(raw json.RawMessage, field string) (string, error) {
+	var payload map[string]string
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(payload[field])
+	if value == "" {
+		return "", fmt.Errorf("%s is required", field)
+	}
+	return value, nil
 }
 
 func toolResult(payload any) map[string]any {
@@ -420,55 +504,51 @@ func toolResult(payload any) map[string]any {
 }
 
 func toolDefinitions() []map[string]any {
-	return []map[string]any{
-		ragToolDefinition("rag_compress", "Compress authorized local inputs into a compact evidence pack for remote synthesis without exporting raw data by default.", []string{"query", "input_refs"}, map[string]any{
-			"query":                map[string]any{"type": "string"},
+	ragSpecs := tasks.RAGAliasSpecs()
+	defs := make([]map[string]any, 0, len(ragSpecs)+12)
+	for _, spec := range ragSpecs {
+		properties := map[string]any{
 			"input_refs":           inputRefsSchema(),
 			"retrieval_strategies": retrievalStrategiesSchema(),
 			"task_params":          map[string]any{"type": "object"},
 			"constraints":          ragConstraintsSchema(),
 			"execution_profile":    ragExecutionProfileSchema(),
 			"idempotency_key":      map[string]any{"type": "string"},
-		}),
-		ragToolDefinition("debug_with_local_context", "Run a local debugging RAG workflow over logs, stack traces, tests, repo paths, and git history.", []string{"problem", "input_refs"}, map[string]any{
-			"problem":              map[string]any{"type": "string"},
-			"input_refs":           inputRefsSchema(),
-			"retrieval_strategies": retrievalStrategiesSchema(),
-			"task_params":          map[string]any{"type": "object"},
-			"constraints":          ragConstraintsSchema(),
-			"execution_profile":    ragExecutionProfileSchema(),
-			"idempotency_key":      map[string]any{"type": "string"},
-		}),
-		ragToolDefinition("summarize_logs", "Retrieve, cluster, deduplicate, and compress large local logs into timestamp-preserving evidence.", []string{"input_refs"}, map[string]any{
-			"input_refs":           inputRefsSchema(),
-			"retrieval_strategies": retrievalStrategiesSchema(),
-			"task_params":          map[string]any{"type": "object"},
-			"constraints":          ragConstraintsSchema(),
-			"execution_profile":    ragExecutionProfileSchema(),
-			"idempotency_key":      map[string]any{"type": "string"},
-		}),
-		ragToolDefinition("inspect_repo", "Build or reuse local repository indexes and return compressed code evidence for a question.", []string{"input_refs"}, map[string]any{
-			"query":                map[string]any{"type": "string"},
-			"input_refs":           inputRefsSchema(),
-			"retrieval_strategies": retrievalStrategiesSchema(),
-			"task_params":          map[string]any{"type": "object"},
-			"constraints":          ragConstraintsSchema(),
-			"execution_profile":    ragExecutionProfileSchema(),
-			"idempotency_key":      map[string]any{"type": "string"},
-		}),
-		ragToolDefinition("propose_patch", "Generate a local candidate patch package from evidence packs and authorized repository paths.", []string{"problem", "input_refs"}, map[string]any{
-			"problem":              map[string]any{"type": "string"},
-			"input_refs":           inputRefsSchema(),
-			"retrieval_strategies": retrievalStrategiesSchema(),
-			"task_params":          map[string]any{"type": "object"},
-			"constraints":          ragConstraintsSchema(),
-			"execution_profile":    ragExecutionProfileSchema(),
-			"idempotency_key":      map[string]any{"type": "string"},
-		}),
+			"wait_for_result":      map[string]any{"type": "boolean"},
+			"max_wait_seconds":     map[string]any{"type": "integer"},
+			"poll_interval_ms":     map[string]any{"type": "integer"},
+		}
+		if spec.PromptField != "" {
+			properties[spec.PromptField] = map[string]any{"type": "string"}
+		}
+		if spec.Name == "inspect_repo" {
+			properties["query"] = map[string]any{"type": "string", "maxLength": tasks.MaxInspectRepoQueryBytes}
+			properties["constraints"] = inspectRepoConstraintsSchema()
+			properties["mode"] = map[string]any{
+				"type":    "string",
+				"enum":    []string{"auto", "evidence", "answer"},
+				"default": "auto",
+			}
+			properties["include_full_trace"] = map[string]any{"type": "boolean", "default": false}
+		}
+		defs = append(defs, ragToolDefinition(spec.Name, spec.Description, spec.Required, properties))
+	}
+	for _, spec := range coreToolDefinitions() {
+		defs = append(defs, map[string]any{
+			"name":        spec.name,
+			"description": spec.description,
+			"inputSchema": spec.inputSchema,
+		})
+	}
+	return defs
+}
+
+func coreToolDefinitions() []toolDefinition {
+	return []toolDefinition{
 		{
-			"name":        "submit_local_job",
-			"description": "Submit a local analysis or inference task to the broker.",
-			"inputSchema": map[string]any{
+			name:        "submit_local_job",
+			description: "Submit a local broker task. Prefer the task-specific RAG tools and set wait_for_result=true when you want an answer-ready result instead of only a job id.",
+			inputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"task_type", "input_refs", "output_schema"},
 				"properties": map[string]any{
@@ -480,13 +560,16 @@ func toolDefinitions() []map[string]any {
 					"orchestration":     orchestrationSchema(),
 					"output_schema":     outputSchemaRefSchema(),
 					"idempotency_key":   map[string]any{"type": "string"},
+					"wait_for_result":   map[string]any{"type": "boolean"},
+					"max_wait_seconds":  map[string]any{"type": "integer"},
+					"poll_interval_ms":  map[string]any{"type": "integer"},
 				},
 			},
 		},
 		{
-			"name":        "submit_parallel_jobs",
-			"description": "Submit many child jobs under one logical root investigation.",
-			"inputSchema": map[string]any{
+			name:        "submit_parallel_jobs",
+			description: "Submit many child jobs under one logical root investigation.",
+			inputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"task_type", "children", "output_schema"},
 				"properties": map[string]any{
@@ -504,25 +587,19 @@ func toolDefinitions() []map[string]any {
 			},
 		},
 		{
-			"name":        "get_job_status",
-			"description": "Retrieve the current state of a previously submitted local job.",
-			"inputSchema": simpleJobIDSchema(),
+			name:        "get_job_status",
+			description: "Retrieve the current state of a previously submitted local job.",
+			inputSchema: simpleJobIDSchema(),
 		},
 		{
-			"name":        "get_root_job_status",
-			"description": "Retrieve aggregate status for a root investigation spanning many child jobs.",
-			"inputSchema": map[string]any{
-				"type":     "object",
-				"required": []string{"root_job_id"},
-				"properties": map[string]any{
-					"root_job_id": map[string]any{"type": "string"},
-				},
-			},
+			name:        "get_root_job_status",
+			description: "Retrieve aggregate status for a root investigation spanning many child jobs.",
+			inputSchema: rootJobIDSchema(),
 		},
 		{
-			"name":        "retry_failed_root_shards",
-			"description": "Retry only the currently failed shards for a root investigation, optionally resubmitting its reducer.",
-			"inputSchema": map[string]any{
+			name:        "retry_failed_root_shards",
+			description: "Retry only the currently failed shards for a root investigation, optionally resubmitting its reducer.",
+			inputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"root_job_id"},
 				"properties": map[string]any{
@@ -533,9 +610,9 @@ func toolDefinitions() []map[string]any {
 			},
 		},
 		{
-			"name":        "release_deferred_root_chunks",
-			"description": "Force immediate release of deferred child chunks for a root investigation, optionally bounded to a one-shot number of batches.",
-			"inputSchema": map[string]any{
+			name:        "release_deferred_root_chunks",
+			description: "Force immediate release of deferred child chunks for a root investigation, optionally bounded to a one-shot number of batches.",
+			inputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"root_job_id"},
 				"properties": map[string]any{
@@ -545,24 +622,24 @@ func toolDefinitions() []map[string]any {
 			},
 		},
 		{
-			"name":        "fetch_result",
-			"description": "Fetch the structured result and artifacts for a completed local job.",
-			"inputSchema": simpleJobIDSchema(),
+			name:        "fetch_result",
+			description: "Fetch the structured result and artifacts for a completed local job.",
+			inputSchema: simpleJobIDSchema(),
 		},
 		{
-			"name":        "get_retry_recommendation",
-			"description": "Return the broker-generated retry recommendation for a completed local job, if one exists.",
-			"inputSchema": simpleJobIDSchema(),
+			name:        "get_retry_recommendation",
+			description: "Return the broker-generated retry recommendation for a completed local job, if one exists.",
+			inputSchema: simpleJobIDSchema(),
 		},
 		{
-			"name":        "retry_with_recommended_profile",
-			"description": "Submit a new job using the broker-recommended execution profile from a completed local job.",
-			"inputSchema": simpleJobIDSchema(),
+			name:        "retry_with_recommended_profile",
+			description: "Submit a new job using the broker-recommended execution profile from a completed local job.",
+			inputSchema: simpleJobIDSchema(),
 		},
 		{
-			"name":        "fetch_job_logs",
-			"description": "Fetch redacted stdout and stderr from a local worker run.",
-			"inputSchema": map[string]any{
+			name:        "fetch_job_logs",
+			description: "Fetch redacted stdout and stderr from a local worker run.",
+			inputSchema: map[string]any{
 				"type":     "object",
 				"required": []string{"job_id"},
 				"properties": map[string]any{
@@ -573,14 +650,14 @@ func toolDefinitions() []map[string]any {
 			},
 		},
 		{
-			"name":        "cancel_job",
-			"description": "Cancel a queued or running local job.",
-			"inputSchema": simpleJobIDSchema(),
+			name:        "cancel_job",
+			description: "Cancel a queued or running local job.",
+			inputSchema: simpleJobIDSchema(),
 		},
 		{
-			"name":        "list_local_capabilities",
-			"description": "List the task types, schemas, execution modes, and backends currently supported by the broker.",
-			"inputSchema": map[string]any{
+			name:        "list_local_capabilities",
+			description: "List broker task types, schemas, execution modes, and backends so an agent can choose the smallest high-signal tool instead of ad hoc local inspection.",
+			inputSchema: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
 			},
@@ -589,59 +666,43 @@ func toolDefinitions() []map[string]any {
 }
 
 func simpleJobIDSchema() map[string]any {
+	return requiredStringFieldSchema("job_id")
+}
+
+func rootJobIDSchema() map[string]any {
+	return requiredStringFieldSchema("root_job_id")
+}
+
+func requiredStringFieldSchema(field string) map[string]any {
 	return map[string]any{
 		"type":     "object",
-		"required": []string{"job_id"},
+		"required": []string{field},
 		"properties": map[string]any{
-			"job_id": map[string]any{"type": "string"},
+			field: map[string]any{"type": "string"},
 		},
 	}
 }
 
-func capabilitiesPayload() map[string]any {
-	return map[string]any{
-		"task_types": []map[string]any{
-			{
-				"name":   "document_summary",
-				"schema": "document_summary_v1",
-				"inputs": []string{"file"},
-			},
-			{
-				"name":   "log_analysis",
-				"schema": "log_analysis_v1",
-				"inputs": []string{"file"},
-			},
-			{
-				"name":   "repo_summary",
-				"schema": "repo_summary_v1",
-				"inputs": []string{"directory", "repo"},
-			},
-			{
-				"name":   "rag_compress",
-				"schema": "rag_evidence_pack_v1",
-				"inputs": []string{"file", "repo", "log", "document", "artifact"},
-			},
-			{
-				"name":   "debug_with_local_context",
-				"schema": "debug_evidence_pack_v1",
-				"inputs": []string{"repo", "log", "artifact"},
-			},
-			{
-				"name":   "summarize_logs",
-				"schema": "log_evidence_pack_v1",
-				"inputs": []string{"log"},
-			},
-			{
-				"name":   "inspect_repo",
-				"schema": "repo_inspection_pack_v1",
-				"inputs": []string{"repo", "directory"},
-			},
-			{
-				"name":   "propose_patch",
-				"schema": "patch_proposal_pack_v1",
-				"inputs": []string{"repo", "artifact"},
-			},
-		},
+func (s *Server) capabilitiesPayload(ctx context.Context) map[string]any {
+	taskSpecs := tasks.Specs()
+	taskTypes := make([]map[string]any, 0, len(taskSpecs))
+	coreTools := coreToolDefinitions()
+	tools := make([]string, 0, len(taskSpecs)+len(coreTools))
+	for _, spec := range taskSpecs {
+		taskTypes = append(taskTypes, map[string]any{
+			"name":   spec.Name,
+			"schema": spec.SchemaName,
+			"inputs": spec.Inputs,
+		})
+		if spec.HTTPPath != "" {
+			tools = append(tools, spec.Name)
+		}
+	}
+	for _, tool := range coreTools {
+		tools = append(tools, tool.name)
+	}
+	payload := map[string]any{
+		"task_types": taskTypes,
 		"backends": []map[string]any{
 			{
 				"name":         "slurm",
@@ -654,24 +715,7 @@ func capabilitiesPayload() map[string]any {
 				"default_mode": "command",
 			},
 		},
-		"tools": []string{
-			"rag_compress",
-			"debug_with_local_context",
-			"summarize_logs",
-			"inspect_repo",
-			"propose_patch",
-			"submit_local_job",
-			"submit_parallel_jobs",
-			"get_job_status",
-			"get_root_job_status",
-			"retry_failed_root_shards",
-			"release_deferred_root_chunks",
-			"fetch_result",
-			"get_retry_recommendation",
-			"retry_with_recommended_profile",
-			"cancel_job",
-			"list_local_capabilities",
-		},
+		"tools": tools,
 		"orchestration": map[string]any{
 			"independent_parallel_jobs":  true,
 			"parent_child_metadata":      true,
@@ -680,54 +724,27 @@ func capabilitiesPayload() map[string]any {
 			"server_side_dag_scheduler":  false,
 		},
 		"cache": map[string]any{
-			"exact_match_tasks": []string{"document_summary", "log_analysis", "repo_summary", "rag_compress", "summarize_logs", "inspect_repo", "debug_with_local_context"},
+			"exact_match_tasks": tasks.CacheableTaskNames(),
 		},
 	}
-}
-
-func decodeRAGToolSubmitRequest(raw json.RawMessage, taskType, schema string) (types.SubmitJobRequest, error) {
-	var payload map[string]any
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return types.SubmitJobRequest{}, err
-	}
-	var req types.SubmitJobRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return types.SubmitJobRequest{}, err
-	}
-	req.TaskType = taskType
-	req.OutputSchema = types.OutputSchemaRef{Name: schema}
-	req.TaskParams = normalizeRAGTaskParams(req.TaskParams, payload, taskType)
-	return req, nil
-}
-
-func normalizeRAGTaskParams(taskParams map[string]any, payload map[string]any, taskType string) map[string]any {
-	out := make(map[string]any, len(taskParams)+2)
-	for k, v := range taskParams {
-		out[k] = v
-	}
-	if value, ok := payload["query"]; ok {
-		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-			out["query"] = text
-		}
-	}
-	if value, ok := payload["problem"]; ok {
-		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-			out["problem"] = text
-		}
-	}
-	if value, ok := payload["retrieval_strategies"]; ok {
-		if strategies, ok := value.([]any); ok && len(strategies) > 0 {
-			out["retrieval_strategies"] = strategies
-		}
-	}
-	if taskType == "debug_with_local_context" {
-		if _, ok := out["problem"]; !ok {
-			if text, ok := payload["problem"].(string); ok {
-				out["problem"] = text
+	payload["gpu_services"] = unavailableGPUServiceCapabilities()
+	if s.gpuCapabilities != nil {
+		if snapshot, err := s.gpuCapabilities(ctx); err == nil {
+			payload["gpu_services"] = snapshot
+		} else {
+			payload["gpu_services"] = map[string]any{
+				"enabled": false,
+				"healthy": false,
+				"error":   err.Error(),
+				"tiers":   unavailableGPUServiceCapabilities()["tiers"],
 			}
 		}
 	}
-	return out
+	return payload
+}
+
+func unavailableGPUServiceCapabilities() map[string]any {
+	return gpuservice.UnavailableCapabilities()
 }
 
 func ragToolDefinition(name, description string, required []string, properties map[string]any) map[string]any {
@@ -795,14 +812,23 @@ func ragConstraintsSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"retrieved_chunk_budget":       map[string]any{"type": "integer"},
-			"per_chunk_compression_budget": map[string]any{"type": "integer"},
-			"final_evidence_pack_budget":   map[string]any{"type": "integer"},
-			"remote_model_context_budget":  map[string]any{"type": "integer"},
-			"max_runtime_seconds":          map[string]any{"type": "integer"},
-			"confidentiality":              map[string]any{"type": "string"},
+			"retrieval_token_budget":         map[string]any{"type": "integer", "minimum": 1},
+			"evidence_token_budget":          map[string]any{"type": "integer", "minimum": 1},
+			"final_pack_token_budget":        map[string]any{"type": "integer", "minimum": 1},
+			"synthesis_context_token_budget": map[string]any{"type": "integer", "minimum": 1},
+			"max_runtime_seconds":            map[string]any{"type": "integer", "minimum": 0, "maximum": tasks.MaxRuntimeSeconds},
+			"confidentiality":                map[string]any{"type": "string"},
 		},
 	}
+}
+
+func inspectRepoConstraintsSchema() map[string]any {
+	schema := ragConstraintsSchema()
+	properties := schema["properties"].(map[string]any)
+	properties["final_pack_token_budget"] = map[string]any{
+		"type": "integer", "minimum": tasks.MinInspectRepoFinalPackTokens,
+	}
+	return schema
 }
 
 func retrievalStrategiesSchema() map[string]any {
@@ -822,7 +848,10 @@ func ragExecutionProfileSchema() map[string]any {
 			"backend": map[string]any{"type": "string"},
 			"tier": map[string]any{
 				"type": "string",
-				"enum": []string{"cpu-rag-indexing", "p40-rag-compression", "a100-reasoning"},
+				"enum": []string{
+					"cpu-rag-indexing", "p40-rag-compression", "a100-reasoning",
+					"p40-retrieval", "p40-synthesis", "v100-reasoning", "a100-single", "a100-multigpu",
+				},
 			},
 			"model": map[string]any{"type": "string"},
 			"runtime": map[string]any{
@@ -832,6 +861,7 @@ func ragExecutionProfileSchema() map[string]any {
 			"qos":        map[string]any{"type": "string"},
 			"nodelist":   map[string]any{"type": "string"},
 			"constraint": map[string]any{"type": "string"},
+			"gpu_count":  map[string]any{"type": "integer", "minimum": 1, "maximum": 4},
 		},
 	}
 }

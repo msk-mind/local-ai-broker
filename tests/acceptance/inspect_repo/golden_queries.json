@@ -1,0 +1,341 @@
+{
+  "name": "inspect_repo_gpu_first_golden_v1",
+  "description": "Thirty repository-inspection queries covering the v2 contract, reproduced quality failures, the MCP call chain, GPU service control plane, retrieval, validation, escalation, policy, and recovery.",
+  "thresholds": {
+    "recall_at_10": 0.9,
+    "mrr": 0.75,
+    "citation_precision": 0.95,
+    "missing_evidence_refs": 0
+  },
+  "queries": [
+    {
+      "id": "root_cause_false_real_local",
+      "query": "Trace the current safeguards that prevent inspect_repo from reporting real_local or answer-ready quality when retrieval and synthesis never reached GPU models.",
+      "mode": "auto",
+      "tags": ["root-cause-regression", "quality"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "broker/pkg/schemas/validate.go",
+        "broker/pkg/service/service_runtime.go"
+      ]
+    },
+    {
+      "id": "mcp_inspect_repo_call_chain",
+      "query": "Trace an MCP inspect_repo tools/call from argument decoding through broker submission and execution staging to the repository worker. Rank the MCP and service entrypoints above generic RAG worker internals.",
+      "mode": "auto",
+      "tags": ["mcp-call-chain-regression", "ranking"],
+      "relevant_paths": [
+        "broker/pkg/mcp/server.go",
+        "broker/pkg/service/service_submission.go",
+        "broker/pkg/service/service_execution.go",
+        "broker/pkg/tasks/catalog.go"
+      ],
+      "ordering_rules": [
+        {
+          "name": "mcp_and_service_above_rag_worker",
+          "higher_prefixes": ["broker/pkg/mcp/", "broker/pkg/service/"],
+          "lower_prefix": "workers/rag-compression/"
+        }
+      ]
+    },
+    {
+      "id": "mcp_query_mode_normalization",
+      "query": "Where are inspect_repo query and mode accepted at the MCP boundary, normalized into task parameters, and validated as auto, evidence, or answer?",
+      "mode": "evidence",
+      "tags": ["mcp", "contract"],
+      "relevant_paths": [
+        "broker/pkg/mcp/server.go",
+        "broker/pkg/tasks/catalog.go"
+      ]
+    },
+    {
+      "id": "repo_inspection_v2_schema",
+      "query": "Show the schema validation path for repo_inspection_v2, including the evidence-only rule that omits answer and synthesized findings.",
+      "mode": "auto",
+      "tags": ["schema", "contract"],
+      "relevant_paths": [
+        "broker/pkg/schemas/validate.go",
+        "workers/rag-compression/inspection_pipeline.py"
+      ]
+    },
+    {
+      "id": "cpu_cannot_be_answer_ready",
+      "query": "Which code prevents lexical CPU fallback from returning an answer-ready inspect_repo result, and how are retrieval, reranking, and synthesis quality recorded separately?",
+      "mode": "auto",
+      "tags": ["quality-gate", "cpu-fallback"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/gpu_client.py",
+        "broker/pkg/schemas/validate.go"
+      ]
+    },
+    {
+      "id": "syntax_aware_chunk_metadata",
+      "query": "Find the repository indexer that creates syntax-aware chunks with path, language, symbol, line range, and content hash metadata.",
+      "mode": "evidence",
+      "tags": ["indexing", "chunks"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_index.py",
+        "workers/rag-compression/inspection_pipeline.py"
+      ]
+    },
+    {
+      "id": "faiss_fts_hybrid_retrieval",
+      "query": "Where are the P40 fingerprinted semantic-index status, upsert, and search protocol and the SQLite FTS5 exact-search index used independently for inspect_repo?",
+      "mode": "evidence",
+      "tags": ["retrieval", "faiss", "fts5"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_index.py",
+        "workers/rag-compression/gpu_client.py"
+      ]
+    },
+    {
+      "id": "rrf_rerank_diversity",
+      "query": "Locate reciprocal-rank fusion, top-64 GPU reranking, and the final 12-chunk selection with a two-chunks-per-file diversity cap.",
+      "mode": "evidence",
+      "tags": ["retrieval", "reranking", "diversity"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/inspection_index.py"
+      ]
+    },
+    {
+      "id": "dirty_repo_fingerprint",
+      "query": "How does inspect_repo invalidate its indexes for HEAD, staged changes, unstaged changes, and untracked file content?",
+      "mode": "evidence",
+      "tags": ["indexing", "cache-invalidation"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_index.py",
+        "workers/rag-compression/inspection_pipeline.py"
+      ]
+    },
+    {
+      "id": "citation_release_validation",
+      "query": "Find the validator that rejects malformed synthesis, findings that cite unknown evidence, missing evidence references, and final-pack budget overruns.",
+      "mode": "answer",
+      "tags": ["citations", "validation"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "broker/pkg/schemas/validate.go"
+      ]
+    },
+    {
+      "id": "same_tier_validation_retry",
+      "query": "Where does synthesis retry once on the same GPU tier with validation feedback before escalating an unsupported or malformed answer?",
+      "mode": "evidence",
+      "tags": ["synthesis", "retry"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/gpu_client.py"
+      ]
+    },
+    {
+      "id": "strict_gpu_escalation_order",
+      "query": "Trace inspect_repo synthesis escalation in strict P40, four-GPU V100, then adaptive A100 order and show where every attempt and reason is recorded.",
+      "mode": "answer",
+      "tags": ["synthesis", "escalation"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/gpu_client.py"
+      ]
+    },
+    {
+      "id": "warm_p40_service_roles",
+      "query": "Where are the distinct warm p40-retrieval and p40-synthesis service profiles, capabilities, minimum replicas, and maximum replicas represented?",
+      "mode": "evidence",
+      "tags": ["control-plane", "p40"],
+      "relevant_paths": [
+        "broker/pkg/gpuservice/types.go",
+        "broker/pkg/gpuservice/config.go",
+        "broker/pkg/config/config.go"
+      ]
+    },
+    {
+      "id": "registry_lease_heartbeat",
+      "query": "Find the shared GPU endpoint registry record and the logic for authenticated endpoints, heartbeats, four-hour leases, and lease expiry.",
+      "mode": "evidence",
+      "tags": ["control-plane", "registry", "lease"],
+      "relevant_paths": [
+        "broker/pkg/gpuservice/registry.go",
+        "broker/pkg/gpuservice/types.go"
+      ]
+    },
+    {
+      "id": "unhealthy_p40_replacement",
+      "query": "How does the service reconciler detect a stale or unhealthy P40 endpoint and replace it without making an inspection request launch the model?",
+      "mode": "evidence",
+      "tags": ["control-plane", "health"],
+      "relevant_paths": [
+        "broker/pkg/gpuservice/reconciler.go",
+        "broker/pkg/gpuservice/health.go",
+        "broker/pkg/gpuservice/registry.go"
+      ]
+    },
+    {
+      "id": "capability_replica_health",
+      "query": "Where does list_local_capabilities expose per-tier active and starting replicas, queue state, endpoint health, model profile, context limit, GPU count, and supported operations?",
+      "mode": "evidence",
+      "tags": ["capabilities", "control-plane"],
+      "relevant_paths": [
+        "broker/pkg/mcp/server.go",
+        "broker/pkg/gpuservice/reconciler.go",
+        "broker/pkg/gpuservice/types.go"
+      ]
+    },
+    {
+      "id": "v100_four_gpu_placement",
+      "query": "Show the Slurm placement path that requests gpu:v100:4 on one node and selects the required v100-reasoning model profile and tensor-parallel runtime arguments.",
+      "mode": "evidence",
+      "tags": ["slurm", "v100"],
+      "relevant_paths": [
+        "broker/pkg/backends/slurm/backend.go",
+        "broker/pkg/backends/slurm/gpu_service.go",
+        "broker/pkg/config/config.go",
+        "broker/pkg/gpuservice/config.go",
+        "configs/broker/slurm-p40-a100.env.example"
+      ]
+    },
+    {
+      "id": "adaptive_a100_gpu_count",
+      "query": "Where does V100 availability, queue, timeout, or service failure select one A100, while OOM, context overflow, invalid synthesis, or model-limit failure selects four A100s?",
+      "mode": "evidence",
+      "tags": ["a100", "escalation"],
+      "relevant_paths": [
+        "broker/pkg/gpuservice/adaptive.go",
+        "workers/rag-compression/inspection_pipeline.py"
+      ]
+    },
+    {
+      "id": "service_startup_not_request_worker",
+      "query": "Demonstrate that GPU model startup is owned by scheduler-managed service jobs and the reconciler rather than the inspect_repo request worker.",
+      "mode": "evidence",
+      "tags": ["control-plane", "startup"],
+      "relevant_paths": [
+        "broker/pkg/gpuservice/reconciler.go",
+        "broker/pkg/backends/slurm/gpu_service.go",
+        "deploy/slurm/gpu_service.slurm",
+        "broker/pkg/service/service_submission.go"
+      ]
+    },
+    {
+      "id": "registry_auth_redaction",
+      "query": "Find where GPU service endpoints use bearer authentication internally while release diagnostics redact the credential.",
+      "mode": "evidence",
+      "tags": ["security", "registry"],
+      "relevant_paths": [
+        "broker/pkg/gpuservice/types.go",
+        "workers/rag-compression/gpu_client.py",
+        "workers/gpu-service/main.py",
+        "broker/pkg/service/service_runtime.go"
+      ]
+    },
+    {
+      "id": "token_explicit_budgets",
+      "query": "Trace retrieval_token_budget, evidence_token_budget, final_pack_token_budget, and synthesis_context_token_budget from request validation into the inspection pipeline.",
+      "mode": "evidence",
+      "tags": ["budgets", "contract"],
+      "relevant_paths": [
+        "broker/pkg/types/types.go",
+        "broker/pkg/mcp/server.go",
+        "workers/rag-compression/inspection_pipeline.py"
+      ]
+    },
+    {
+      "id": "compact_release_optional_trace",
+      "query": "Where does inspect_repo release only the result, evidence pack, and compact GPU diagnostics by default while keeping full retrieval traces optional?",
+      "mode": "evidence",
+      "tags": ["artifacts", "release"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/main.py",
+        "broker/pkg/service/service.go"
+      ]
+    },
+    {
+      "id": "broker_restart_registry_recovery",
+      "query": "How does a broker restart reload healthy GPU service leases from the shared registry without duplicating warm replicas?",
+      "mode": "evidence",
+      "tags": ["recovery", "registry"],
+      "relevant_paths": [
+        "broker/pkg/gpuservice/registry.go",
+        "broker/pkg/gpuservice/reconciler.go"
+      ]
+    },
+    {
+      "id": "concurrent_scale_limits",
+      "query": "Find the concurrency control that keeps warm P40 services between configured minimum and maximum replicas and scale-to-zero V100/A100 profiles at one maximum replica.",
+      "mode": "evidence",
+      "tags": ["control-plane", "concurrency"],
+      "relevant_paths": [
+        "broker/pkg/gpuservice/types.go",
+        "broker/pkg/gpuservice/registry.go",
+        "broker/pkg/gpuservice/reconciler.go",
+        "broker/pkg/gpuservice/config.go"
+      ]
+    },
+    {
+      "id": "authorized_repo_inputs",
+      "query": "Trace canonical repository file URI normalization and staged input-manifest resolution before inspect_repo discovers local files.",
+      "mode": "evidence",
+      "tags": ["inputs", "staging"],
+      "relevant_paths": [
+        "broker/pkg/service/service_submission.go",
+        "broker/pkg/service/service_execution.go",
+        "workers/rag-compression/main.py"
+      ]
+    },
+    {
+      "id": "audit_gpu_attempts",
+      "query": "Where are inspect_repo tier attempts, Slurm job IDs, GPU counts, model profiles, failure categories, and escalation reasons retained in compact job diagnostics without leaking bearer tokens?",
+      "mode": "evidence",
+      "tags": ["audit", "diagnostics"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "broker/pkg/service/service_runtime.go"
+      ]
+    },
+    {
+      "id": "fingerprinted_index_cache",
+      "query": "Find the private fingerprinted cache for repository lexical indexes, GPU embeddings, and optional FAISS vectors, including dirty-content invalidation.",
+      "mode": "evidence",
+      "tags": ["cache", "indexing"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_index.py",
+        "workers/rag-compression/inspection_pipeline.py"
+      ]
+    },
+    {
+      "id": "required_deployment_profiles",
+      "query": "Which deployment configuration fields require explicit model path, quantization, context limit, runtime, and runtime arguments for all five GPU service tiers?",
+      "mode": "evidence",
+      "tags": ["configuration", "models"],
+      "relevant_paths": [
+        "broker/pkg/config/config.go",
+        "configs/broker/slurm-p40-a100.env.example",
+        "broker/pkg/gpuservice/config.go",
+        "broker/pkg/gpuservice/config_test.go"
+      ]
+    },
+    {
+      "id": "staged_worker_cli_contract",
+      "query": "Trace the staged inspect_repo worker CLI contract from job_spec.json, execution_plan.json, and input_manifest.json to repo_inspection_v2 result.json.",
+      "mode": "evidence",
+      "tags": ["worker-cli", "integration"],
+      "relevant_paths": [
+        "workers/rag-compression/main.py",
+        "broker/pkg/service/service_execution.go",
+        "deploy/local/broker_worker.sh"
+      ]
+    },
+    {
+      "id": "remove_canned_query_handlers",
+      "query": "Verify that inspect_repo no longer special-cases coverage, retry, artifact-access, or simplicity query wording and instead uses the same retrieval, reranking, synthesis, and validation pipeline.",
+      "mode": "evidence",
+      "tags": ["regression", "canned-handlers"],
+      "relevant_paths": [
+        "workers/rag-compression/inspection_pipeline.py",
+        "workers/rag-compression/main.py"
+      ]
+    }
+  ]
+}

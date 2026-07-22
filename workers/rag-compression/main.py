@@ -7,12 +7,20 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+
+
+WORKER_DIR = Path(__file__).resolve().parent
+if str(WORKER_DIR) not in sys.path:
+    sys.path.insert(0, str(WORKER_DIR))
+
+from inspection_pipeline import run_inspection, validate_request
 
 
 IGNORE_DIRS = {
@@ -70,6 +78,10 @@ def main():
     parser.add_argument("--input-manifest", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--heartbeat-path")
+    # The local backend appends this optional completion notification hook to
+    # every staged worker command.  RAG workers still use result-file polling,
+    # but must accept the common worker invocation contract.
+    parser.add_argument("--completion-socket-path")
     args = parser.parse_args()
 
     job_spec = load_json(Path(args.job_spec))
@@ -84,9 +96,6 @@ def main():
 
     emit_heartbeat(heartbeat_path, job_spec["job_id"], "running", "discovering_inputs", 10, "Discovering local inputs", {})
     task_type = job_spec["task_type"]
-    if task_type == "inspect_repo" and runtime_adapter.get("name") == "deterministic":
-        runtime_adapter["backend_mode"] = "real"
-        runtime_adapter["backend_detail"] = "deterministic_repo_inspection"
     task_params = job_spec.get("task_params") or {}
     constraints = job_spec.get("constraints") or {}
     input_refs = input_manifest.get("input_refs") or []
@@ -94,6 +103,19 @@ def main():
         raise ValueError(f"{task_type} requires at least one input ref")
 
     discovered = discover_inputs(input_refs)
+    if task_type == "inspect_repo":
+        query, mode = validate_request(task_params.get("query"), task_params.get("mode", "auto"))
+        return run_repo_inspection_job(
+            job_spec,
+            task_params,
+            constraints,
+            query,
+            mode,
+            discovered,
+            execution_plan,
+            output_dir,
+            heartbeat_path,
+        )
     excluded_dir_names = excluded_dir_names_for(task_params)
     emit_heartbeat(heartbeat_path, job_spec["job_id"], "running", "chunking", 20, "Chunking local inputs", {
         "input_count": len(discovered),
@@ -161,6 +183,167 @@ def main():
     return 0
 
 
+def run_repo_inspection_job(
+    job_spec,
+    task_params,
+    constraints,
+    query,
+    mode,
+    discovered,
+    execution_plan,
+    output_dir,
+    heartbeat_path,
+):
+    job_id = job_spec["job_id"]
+    from inspection_hotpath import cached_lexical_fallback_from_context, prepare_prefetched_state
+
+    prefetched_state = prepare_prefetched_state(
+        discovered,
+        query,
+        mode=mode,
+        constraints=constraints,
+        task_params=task_params,
+        execution_plan=execution_plan,
+        output_dir=output_dir,
+    )
+    cached_run = prefetched_state.get("cached_lexical_fallback_run")
+    if cached_run is None and not bool(prefetched_state.get("prefetched_query_stage_requires_verification")):
+        cached_run = cached_lexical_fallback_from_context(prefetched_state)
+    if cached_run is not None:
+        payload = cached_run["payload"]
+        runtime = payload.get("runtime")
+        if not isinstance(runtime, dict):
+            runtime = {}
+            payload["runtime"] = runtime
+        runtime["prefetch_state_source"] = str(prefetched_state.get("prefetch_state_source") or "")
+        runtime["prefetch_state_cache_hit"] = bool(prefetched_state.get("prefetch_state_cache_hit"))
+        artifacts = write_repo_inspection_artifacts(
+            output_dir,
+            cached_run.get("artifact_payloads") or {},
+            highest_classification(discovered),
+            include_full_trace=bool(task_params.get("include_full_trace")),
+        )
+        result = {
+            "schema_name": "repo_inspection_v2",
+            "schema_version": "2.0.0",
+            "payload": payload,
+        }
+        write_json(output_dir / "result.json", result)
+        write_json(output_dir / "artifacts.json", artifacts)
+        emit_heartbeat(
+            heartbeat_path,
+            job_id,
+            "completed",
+            "completed",
+            100,
+            "Repository inspection completed from persisted lexical-fallback cache",
+            {
+                "evidence_count": len(payload.get("evidence") or []),
+                "quality_result": (payload.get("quality") or {}).get("result", ""),
+                "artifact_count": len(artifacts),
+                "query_stage_cache_hit": True,
+            },
+        )
+        return 0
+
+    emit_heartbeat(
+        heartbeat_path,
+        job_id,
+        "running",
+        "gpu_first_retrieval",
+        30,
+        "Building repository indexes and retrieving GPU candidates",
+        {},
+    )
+    run = run_inspection(
+        discovered,
+        query,
+        mode=mode,
+        constraints=constraints,
+        task_params=task_params,
+        execution_plan=execution_plan,
+        output_dir=output_dir,
+        prefetched_state=prefetched_state,
+    )
+    payload = run["payload"]
+    runtime = payload.get("runtime")
+    if not isinstance(runtime, dict):
+        runtime = {}
+        payload["runtime"] = runtime
+    runtime["prefetch_state_source"] = str(prefetched_state.get("prefetch_state_source") or "")
+    runtime["prefetch_state_cache_hit"] = bool(prefetched_state.get("prefetch_state_cache_hit"))
+    emit_heartbeat(
+        heartbeat_path,
+        job_id,
+        "running",
+        "validated_synthesis",
+        85,
+        "Validating GPU synthesis and evidence citations",
+        {
+            "evidence_count": len(payload.get("evidence") or []),
+            "answer_ready": bool((payload.get("quality") or {}).get("answer_ready")),
+        },
+    )
+    artifacts = write_repo_inspection_artifacts(
+        output_dir,
+        run.get("artifact_payloads") or {},
+        highest_classification(discovered),
+        include_full_trace=bool(task_params.get("include_full_trace")),
+    )
+    result = {
+        "schema_name": "repo_inspection_v2",
+        "schema_version": "2.0.0",
+        "payload": payload,
+    }
+    write_json(output_dir / "result.json", result)
+    write_json(output_dir / "artifacts.json", artifacts)
+    emit_heartbeat(
+        heartbeat_path,
+        job_id,
+        "completed",
+        "completed",
+        100,
+        "Repository inspection completed",
+        {
+            "evidence_count": len(payload.get("evidence") or []),
+            "quality_result": (payload.get("quality") or {}).get("result", ""),
+            "artifact_count": len(artifacts),
+        },
+    )
+    return 0
+
+
+def write_repo_inspection_artifacts(output_dir, artifact_payloads, classification, *, include_full_trace=True):
+    definitions = {
+        "evidence_pack": ("artifact_evidence_pack", "evidence_pack"),
+        "retrieval_result": ("artifact_retrieval_result", "retrieval_result"),
+        "runtime_diagnostics": ("artifact_runtime_diagnostics", "runtime_diagnostics"),
+        "chunk_manifest": ("artifact_chunk_manifest", "chunk_manifest"),
+    }
+    allowed_names = {"evidence_pack"}
+    if include_full_trace:
+        allowed_names.update({"retrieval_result", "runtime_diagnostics", "chunk_manifest"})
+    artifacts = []
+    for name, payload in artifact_payloads.items():
+        if name not in allowed_names:
+            continue
+        definition = definitions.get(name)
+        if definition is None:
+            continue
+        path = output_dir / f"{name}.json"
+        write_json_if_changed(path, payload)
+        artifact_id, artifact_type = definition
+        artifacts.append(
+            {
+                "artifact_id": artifact_id,
+                "artifact_type": artifact_type,
+                "path": str(path),
+                "classification": classification,
+            }
+        )
+    return artifacts
+
+
 def load_json(path: Path):
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
@@ -172,9 +355,42 @@ def load_optional_json(path: Path):
     return load_json(path)
 
 
+def _path_bytes_equal(path: Path | None, payload: bytes):
+    if path is None or not path.exists():
+        return False
+    try:
+        stat = path.stat()
+        if int(stat.st_size) != len(payload):
+            return False
+        return path.read_bytes() == payload
+    except OSError:
+        return False
+
+
+def _json_bytes(payload):
+    return (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+
+
+def write_json_if_changed(path, payload):
+    encoded = _json_bytes(payload)
+    if _path_bytes_equal(path, encoded):
+        return path
+    tmp = path.with_suffix(path.suffix + f".tmp-{os.getpid()}")
+    tmp.unlink(missing_ok=True)
+    descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, path)
+    path.chmod(0o600)
+    return path
+
+
 def write_json(path, payload):
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
+    write_json_if_changed(path, payload)
 
 
 def emit_heartbeat(path, job_id, state, phase, percent, message, metrics):
@@ -296,6 +512,7 @@ def discover_inputs(input_refs):
                 "source_job_id": metadata.get("source_job_id", ""),
                 "path": path,
                 "content": content,
+                "content_hash": str(ref.get("content_hash") or metadata.get("content_hash") or ""),
             })
             continue
         path = resolve_file_uri(uri)
@@ -307,6 +524,7 @@ def discover_inputs(input_refs):
                 "classification": classification,
                 "path": path,
                 "content": "",
+                "content_hash": str(ref.get("content_hash") or metadata.get("content_hash") or ""),
             })
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -317,6 +535,7 @@ def discover_inputs(input_refs):
             "classification": classification,
             "path": path,
             "content": text,
+            "content_hash": str(ref.get("content_hash") or metadata.get("content_hash") or ""),
         })
     return discovered
 
@@ -407,13 +626,19 @@ def available_strategies(task_type, discovered):
     strategies = []
     input_types = {item.get("type", "") for item in discovered}
     if "log" in input_types:
-        strategies.extend(["ripgrep", "bm25"])
+        if ripgrep_available():
+            strategies.append("ripgrep")
+        strategies.append("bm25")
         if task_type == "debug_with_local_context":
             strategies.append("stack_trace_path")
     if "repo" in input_types or "file" in input_types:
         if task_type == "inspect_repo":
             strategies.append("repo_structure")
-        strategies.extend(["ripgrep", "bm25", "tree_sitter"])
+        if ripgrep_available():
+            strategies.append("ripgrep")
+        strategies.append("bm25")
+        if tree_sitter_available():
+            strategies.append("tree_sitter")
         if task_type in {"debug_with_local_context", "propose_patch"}:
             strategies.append("git_diff_history")
     if "document" in input_types:
@@ -428,6 +653,25 @@ def available_strategies(task_type, discovered):
         seen.add(name)
         ordered.append(name)
     return ordered
+
+
+def ripgrep_available():
+    return shutil.which("rg") is not None
+
+
+def tree_sitter_available():
+    path = resolve_tree_sitter_path()
+    return path is not None and bool(discover_tree_sitter_grammars())
+
+
+def resolve_tree_sitter_path():
+    candidate = shutil.which("tree-sitter")
+    if candidate:
+        return candidate
+    fallback = Path("/gpfs/mskmind_ess/limr/repos/tree-sitter/target/release/tree-sitter")
+    if fallback.is_file():
+        return str(fallback)
+    return None
 
 
 def chunk_repo(item, excluded_dir_names):
@@ -589,7 +833,7 @@ def build_executor_context(discovered, query_terms):
         "rg_path": shutil.which("rg"),
         "search_roots": search_roots,
         "rg_hits": {},
-        "tree_sitter_path": shutil.which("tree-sitter") or "/gpfs/mskmind_ess/limr/repos/tree-sitter/target/release/tree-sitter",
+        "tree_sitter_path": resolve_tree_sitter_path(),
         "tree_sitter_grammars": discover_tree_sitter_grammars(),
         "tree_sitter_tags": {},
     }
@@ -803,7 +1047,7 @@ def bm25_executor(executor_context, chunk, task_type, query_terms, task_params):
     if task_type in {"summarize_logs", "debug_with_local_context"} and chunk["input_type"] == "log":
         score += log_signal_score(text)
         reasons.append("log_signal")
-    return score, unique_preserving_order(reasons), {"backend_mode": "heuristic", "backend_detail": "deterministic_bm25"}
+    return score, unique_preserving_order(reasons), {"backend_mode": "real", "backend_detail": "deterministic_bm25"}
 
 
 def repo_structure_executor(executor_context, chunk, task_type, query_terms, task_params):
@@ -1178,23 +1422,40 @@ def semantic_overlap_score(text, query_terms):
     return score
 
 
-def build_retrieval_policy_signals(retrieval_trace, selected_chunks, excluded_dir_names):
+def build_retrieval_policy_signals(task_type, retrieval_trace, selected_chunks, excluded_dir_names, runtime_adapter):
     executions = retrieval_trace.get("strategy_executions") or []
     mode_counts = Counter()
     degraded = []
     for execution in executions:
         mode = str(execution.get("backend_mode") or "unknown")
         mode_counts[mode] += 1
-        if mode in {"fallback", "unavailable"}:
+        if mode in {"heuristic", "fallback", "unavailable"}:
             degraded.append({
                 "strategy": execution.get("strategy", ""),
                 "backend_mode": mode,
                 "backend_detail": execution.get("backend_detail", ""),
             })
+
+    runtime_mode = str(runtime_adapter.get("backend_mode") or "unknown")
+    if runtime_mode:
+        mode_counts[runtime_mode] += 1
+    if runtime_mode in {"heuristic", "fallback", "unavailable", "configured_local_llm"}:
+        degraded.append({
+            "strategy": "runtime_backend",
+            "backend_mode": runtime_mode,
+            "backend_detail": runtime_adapter.get("backend_detail", ""),
+        })
+
     warnings = []
-    if mode_counts.get("fallback", 0) > 0:
+    if any(mode_counts.get(mode, 0) > 0 for mode in {"heuristic", "fallback", "unavailable", "configured_local_llm"}):
         warnings.append("LOCAL_RETRIEVAL_DEGRADED")
-    if mode_counts.get("real", 0) == 0:
+    # Deterministic retrieval can still produce useful evidence, but it is
+    # not a real model-backed execution.  Mark that distinction explicitly so
+    # the broker can recommend an escalated retry.  An unavailable configured
+    # model remains a degraded-local case with its own diagnostics.
+    if task_type == "rag_compress" and runtime_mode == "heuristic" and str(runtime_adapter.get("name") or "") == "deterministic":
+        warnings.append("NO_REAL_RETRIEVAL_BACKEND")
+    elif mode_counts.get("real", 0) == 0:
         warnings.append("NO_REAL_RETRIEVAL_BACKEND")
     contaminated_paths = [
         chunk.get("path", "")
@@ -1206,7 +1467,7 @@ def build_retrieval_policy_signals(retrieval_trace, selected_chunks, excluded_di
     return {
         "mode_counts": dict(mode_counts),
         "degraded_strategies": degraded,
-        "real_backend_required_recommended": mode_counts.get("fallback", 0) > 0 or mode_counts.get("unavailable", 0) > 0,
+        "real_backend_required_recommended": any(mode_counts.get(mode, 0) > 0 for mode in {"heuristic", "fallback", "unavailable", "configured_local_llm"}),
         "warnings": warnings,
         "contaminated_paths": contaminated_paths[:8],
     }
@@ -1218,7 +1479,7 @@ def build_result(task_type, job_spec, task_params, constraints, query, discovere
     retrieval["compression_backend"] = runtime_adapter["name"]
     retrieval["runtime_backend_mode"] = runtime_adapter["backend_mode"]
     retrieval["runtime_backend_detail"] = runtime_adapter["backend_detail"]
-    policy_signals = build_retrieval_policy_signals(retrieval_trace, selected_chunks, excluded_dir_names)
+    policy_signals = build_retrieval_policy_signals(task_type, retrieval_trace, selected_chunks, excluded_dir_names, runtime_adapter)
     validation = build_validation_report(job_spec["output_schema"]["name"], evidence, retrieval, retrieval_plan, retrieval_trace, policy_signals, chunk_manifest, rerank_result, budget_state, runtime_context, runtime_adapter, excluded_dir_names)
     warnings = list(validation["warnings"])
     artifacts = build_artifacts(task_type, output_dir, evidence, selected_chunks, retrieval, retrieval_plan, retrieval_trace, chunk_manifest, rerank_result, validation, runtime_context, runtime_adapter)
@@ -1230,7 +1491,7 @@ def build_result(task_type, job_spec, task_params, constraints, query, discovere
     elif task_type == "summarize_logs":
         payload = build_log_payload(evidence, warnings, runtime_context)
     elif task_type == "inspect_repo":
-        payload = build_repo_inspection_payload(query, evidence, selected_chunks, warnings, runtime_context)
+        raise ValueError("inspect_repo must run through repo_inspection_v2")
     elif task_type == "propose_patch":
         payload = build_patch_payload(task_params, evidence, warnings, runtime_context)
     else:
@@ -1269,8 +1530,106 @@ def build_evidence(selected_chunks, constraints, runtime_adapter):
     return evidence
 
 
-def build_rag_payload(query, discovered, evidence, retrieval, retrieval_plan, retrieval_trace, policy_signals, constraints, warnings, runtime_context):
+def build_agent_summary(task_type, evidence, warnings):
+    findings = derive_agent_findings(evidence)
+    usage_guidance = build_usage_guidance(warnings)
     return {
+        "findings": findings,
+        "answer_brief": [item["summary"] for item in findings[:5]],
+        "recommended_next_action": default_next_action(task_type, usage_guidance["mode"]),
+        "confidence": confidence_label(usage_guidance["mode"], findings),
+        "must_cite_evidence": bool(findings),
+        "usage_guidance": usage_guidance,
+    }
+
+
+def derive_agent_findings(evidence):
+    findings = []
+    for ev in evidence[:5]:
+        findings.append({
+            "summary": ev.get("claim", ""),
+            "claim_type": claim_type_for_kind(ev.get("kind", "")),
+            "severity": severity_for_kind(ev.get("kind", "")),
+            "confidence": confidence_label_from_score(ev.get("confidence", 0.0)),
+            "evidence_refs": [ev.get("id", "")] if ev.get("id") else [],
+            "source_refs": (ev.get("source_refs") or [])[:2],
+        })
+    return findings
+
+
+def claim_type_for_kind(kind):
+    if kind in {"build_error", "linker_error", "runtime_exception", "test_failure", "generic_error"}:
+        return "observation"
+    if kind in {"config_reference", "api_surface", "symbol_definition"}:
+        return "recommendation"
+    return "hypothesis"
+
+
+def severity_for_kind(kind):
+    if kind in {"build_error", "linker_error", "runtime_exception", "test_failure"}:
+        return "high"
+    if kind in {"generic_error", "config_reference"}:
+        return "medium"
+    return "low"
+
+
+def build_usage_guidance(warnings):
+    warning_set = set(warnings or [])
+    if "NO_REAL_RETRIEVAL_BACKEND" in warning_set:
+        return {
+            "mode": "lead_generation_only",
+            "needs_direct_verification": True,
+            "recommended_action": "Retry with a real local backend or inspect the cited files directly before making claims.",
+        }
+    if warning_set.intersection({"LOCAL_RETRIEVAL_DEGRADED", "IGNORED_PATH_RETRIEVAL_CONTAMINATION"}):
+        return {
+            "mode": "verify_before_claiming",
+            "needs_direct_verification": True,
+            "recommended_action": "Use the cited refs as pointers, but verify them directly before making strong claims.",
+        }
+    return {
+        "mode": "broker_evidence_ready",
+        "needs_direct_verification": False,
+        "recommended_action": "Use the cited evidence directly in the answer and keep claims scoped to those refs.",
+    }
+
+
+def default_next_action(task_type, guidance_mode):
+    if guidance_mode == "lead_generation_only":
+        return "Retry with a stronger local backend or inspect the referenced files directly before answering."
+    if guidance_mode == "verify_before_claiming":
+        return "Verify the cited files directly, then answer using only the confirmed evidence."
+    if task_type == "inspect_repo":
+        return "Start with the most relevant subsystem or symbol and cite the referenced files."
+    if task_type == "debug_with_local_context":
+        return "Lead with the highest-confidence root cause candidate and validate it against the cited code and logs."
+    if task_type == "summarize_logs":
+        return "Summarize the dominant failure cluster first, then use the cited log evidence to guide the next step."
+    if task_type == "propose_patch":
+        return "Keep the patch scoped to the cited files and validate the change against the referenced evidence."
+    return "Use the cited evidence directly in the answer."
+
+
+def confidence_label(mode, findings):
+    if mode == "lead_generation_only":
+        return "low"
+    if mode == "verify_before_claiming":
+        return "medium"
+    if findings:
+        return findings[0].get("confidence", "medium")
+    return "medium"
+
+
+def confidence_label_from_score(score):
+    if score >= 0.8:
+        return "high"
+    if score >= 0.65:
+        return "medium"
+    return "low"
+
+
+def build_rag_payload(query, discovered, evidence, retrieval, retrieval_plan, retrieval_trace, policy_signals, constraints, warnings, runtime_context):
+    payload = {
         "query": query,
         "input_scope": {
             "classification": highest_classification(discovered),
@@ -1300,6 +1659,8 @@ def build_rag_payload(query, discovered, evidence, retrieval, retrieval_plan, re
         "provenance": build_provenance(runtime_context),
         "warnings": warnings,
     }
+    payload.update(build_agent_summary("rag_compress", evidence, warnings))
+    return payload
 
 
 def build_debug_payload(task_params, evidence, retrieval, constraints, warnings, runtime_context):
@@ -1312,7 +1673,7 @@ def build_debug_payload(task_params, evidence, retrieval, constraints, warnings,
             "confidence": ev["confidence"],
             "evidence_refs": [ev["id"]],
         })
-    return {
+    payload = {
         "problem": str(task_params.get("problem") or ""),
         "failure_signature": {
             "tests": failing_tests,
@@ -1329,6 +1690,8 @@ def build_debug_payload(task_params, evidence, retrieval, constraints, warnings,
         "provenance": build_provenance(runtime_context),
         "warnings": warnings,
     }
+    payload.update(build_agent_summary("debug_with_local_context", evidence, warnings))
+    return payload
 
 
 def build_log_payload(evidence, warnings, runtime_context):
@@ -1350,7 +1713,7 @@ def build_log_payload(evidence, warnings, runtime_context):
     summary = "No log evidence was found."
     if evidence:
         summary = f"The first high-signal issue is {evidence[0]['kind']}; additional evidence was deduplicated into {len(clusters)} clusters."
-    return {
+    payload = {
         "summary": summary,
         "timeline": timeline,
         "clusters": clusters,
@@ -1358,51 +1721,21 @@ def build_log_payload(evidence, warnings, runtime_context):
         "provenance": build_provenance(runtime_context),
         "warnings": warnings,
     }
-
-
-def build_repo_inspection_payload(query, evidence, selected_chunks, warnings, runtime_context):
-    subsystems = []
-    symbols = []
-    seen_paths = set()
-    for ev, chunk in zip(evidence[:6], selected_chunks[:6]):
-        path = chunk["path"]
-        top_dir = path.split("/", 1)[0]
-        if top_dir not in seen_paths:
-            subsystems.append({
-                "name": top_dir,
-                "paths": [top_dir],
-                "evidence_refs": [ev["id"]],
-            })
-            seen_paths.add(top_dir)
-        symbol = detect_symbol(chunk["content"])
-        if symbol:
-            symbols.append({
-                "name": symbol,
-                "path": path,
-                "line_start": chunk["line_start"],
-                "line_end": chunk["line_end"],
-                "evidence_refs": [ev["id"]],
-            })
-    return {
-        "query": query,
-        "subsystems": subsystems,
-        "symbols": symbols,
-        "evidence": evidence,
-        "provenance": build_provenance(runtime_context),
-        "warnings": warnings,
-    }
+    payload.update(build_agent_summary("summarize_logs", evidence, warnings))
+    return payload
 
 
 def build_patch_payload(task_params, evidence, warnings, runtime_context):
     allowed_paths = task_params.get("allowed_paths") or []
     target_path = allowed_paths[0] if allowed_paths else infer_patch_path(evidence)
     patch_ref = "artifact_patch_plan"
-    return {
+    rationale = patch_rationale(evidence)
+    payload = {
         "summary": "A candidate patch should tighten the failing path with the smallest change that matches the cited local evidence.",
         "patches": [{
             "patch_ref": patch_ref,
             "paths": [target_path] if target_path else [],
-            "rationale": evidence[0]["claim"] if evidence else "No evidence was available; inspect inputs before changing code.",
+            "rationale": rationale,
             "evidence_refs": [ev["id"] for ev in evidence[:3]],
             "confidence": evidence[0]["confidence"] if evidence else 0.3,
             "policy": {
@@ -1414,6 +1747,8 @@ def build_patch_payload(task_params, evidence, warnings, runtime_context):
         "provenance": build_provenance(runtime_context),
         "warnings": warnings,
     }
+    payload.update(build_agent_summary("propose_patch", evidence, warnings))
+    return payload
 
 
 def build_artifacts(task_type, output_dir, evidence, selected_chunks, retrieval, retrieval_plan, retrieval_trace, chunk_manifest, rerank_result, validation, runtime_context, runtime_adapter):
@@ -1686,6 +2021,16 @@ def infer_patch_paths(evidence):
                 seen.add(path)
                 paths.append(path)
     return paths
+
+
+def patch_rationale(evidence):
+    if not evidence:
+        return "No evidence was available; inspect inputs before changing code."
+    for ev in evidence:
+        preview = str(ev.get("excerpt_preview") or "").strip()
+        if preview and preview != ev.get("claim", ""):
+            return truncate(preview, 220)
+    return evidence[0]["claim"]
 
 
 def compress_text(text, budget, runtime_adapter):

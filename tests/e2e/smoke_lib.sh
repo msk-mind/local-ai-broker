@@ -28,20 +28,52 @@ PY
 
 kill_pid_if_running() {
   local pid="${1:-}"
-  if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+  if [ -z "${pid}" ]; then
+    return 0
+  fi
+
+  local target_pgid=""
+  local self_pgid=""
+  target_pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d '[:space:]' || true)"
+  self_pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d '[:space:]' || true)"
+
+  if [ -n "${target_pgid}" ] && [ "${target_pgid}" != "${self_pgid}" ]; then
+    kill -- "-${target_pgid}" 2>/dev/null || true
+    sleep 0.2
+    kill -9 -- "-${target_pgid}" 2>/dev/null || true
+  fi
+
+  if kill -0 "${pid}" 2>/dev/null; then
     kill "${pid}" 2>/dev/null || true
+    sleep 0.2
+    kill -9 "${pid}" 2>/dev/null || true
     wait "${pid}" 2>/dev/null || true
   fi
 }
 
 start_broker_server() {
   local repo_root="$1"
+  local go_bin="${GO_BIN:-$(command -v go)}"
+  local cgo_enabled="${CGO_ENABLED:-0}"
+  local broker_log_path="${BROKER_LOG_PATH:-}"
+  if [ -z "${go_bin}" ]; then
+    echo "go not found on PATH" >&2
+    return 1
+  fi
+  if [ -z "${broker_log_path}" ]; then
+    broker_log_path="$(mktemp /tmp/local-ai-broker-broker-server.XXXXXX.log)"
+    export BROKER_LOG_PATH="${broker_log_path}"
+  fi
 
-  env -u GOROOT GOCACHE=/tmp/local-ai-broker-gocache GOPATH=/tmp/local-ai-broker-gopath \
-    /usr/bin/go run "${repo_root}/broker/cmd/broker-server" &
+  setsid env -u GOROOT CGO_ENABLED="${cgo_enabled}" GOCACHE=/tmp/local-ai-broker-gocache GOPATH=/tmp/local-ai-broker-gopath \
+    "${go_bin}" run "${repo_root}/broker/cmd/broker-server" >"${broker_log_path}" 2>&1 &
   BROKER_PID=$!
 
-  wait_for_http_ok "http://${BROKER_LISTEN_ADDR}/healthz" 200 0.1
+  if ! wait_for_http_ok "http://${BROKER_LISTEN_ADDR}/healthz" 400 0.1; then
+    echo "broker startup failed; log follows from ${broker_log_path}" >&2
+    tail -n 200 "${broker_log_path}" >&2 || true
+    return 1
+  fi
 }
 
 extract_job_id() {

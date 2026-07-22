@@ -1,3 +1,8 @@
 .broker/
+.broker-live-tests/
+repo-inspection-v2-cache/
+/slurm-*.out
+/cache.test
+/configs/broker/generated.local.json
 __pycache__/
 *.pyc

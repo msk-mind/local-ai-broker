@@ -25,8 +25,14 @@ type InputRef struct {
 }
 
 type Constraints struct {
-	MaxInputTokens            int    `json:"max_input_tokens,omitempty"`
-	MaxOutputTokens           int    `json:"max_output_tokens,omitempty"`
+	MaxInputTokens              int `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens             int `json:"max_output_tokens,omitempty"`
+	RetrievalTokenBudget        int `json:"retrieval_token_budget,omitempty"`
+	EvidenceTokenBudget         int `json:"evidence_token_budget,omitempty"`
+	FinalPackTokenBudget        int `json:"final_pack_token_budget,omitempty"`
+	SynthesisContextTokenBudget int `json:"synthesis_context_token_budget,omitempty"`
+	// Deprecated compatibility aliases. New clients should use the explicit
+	// token budgets above.
 	RetrievedChunkBudget      int    `json:"retrieved_chunk_budget,omitempty"`
 	PerChunkCompressionBudget int    `json:"per_chunk_compression_budget,omitempty"`
 	FinalEvidencePackBudget   int    `json:"final_evidence_pack_budget,omitempty"`
@@ -43,6 +49,7 @@ type ExecutionProfile struct {
 	Model          string `json:"model,omitempty"`
 	Runtime        string `json:"runtime,omitempty"`
 	Accelerator    string `json:"accelerator,omitempty"`
+	GPUCount       int    `json:"gpu_count,omitempty"`
 	QOS            string `json:"qos,omitempty"`
 	NodeList       string `json:"nodelist,omitempty"`
 	Constraint     string `json:"constraint,omitempty"`
@@ -139,13 +146,15 @@ type Job struct {
 	ResultError            string             `json:"result_error,omitempty"`
 	CacheKey               string             `json:"cache_key,omitempty"`
 	CacheStatus            string             `json:"cache_status,omitempty"`
+	CacheSourceJobID       string             `json:"cache_source_job_id,omitempty"`
 }
 
 type SubmitJobResponse struct {
-	JobID     string      `json:"job_id"`
-	State     JobState    `json:"state"`
-	Cache     CacheStatus `json:"cache"`
-	StatusURL string      `json:"status_url"`
+	JobID          string            `json:"job_id"`
+	State          JobState          `json:"state"`
+	Cache          CacheStatus       `json:"cache"`
+	StatusURL      string            `json:"status_url"`
+	ReleasedResult *JobResultRelease `json:"released_result,omitempty"`
 }
 
 type ParallelChildRequest struct {

@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,7 +29,7 @@ func repoRoot(t *testing.T) string {
 	return root
 }
 
-func waitForJob(t *testing.T, svc *service.Service, jobID string, timeout time.Duration) types.Job {
+func waitForJob(t *testing.T, svc *service.Service, runRoot, jobID string, timeout time.Duration) types.Job {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
@@ -37,6 +39,7 @@ func waitForJob(t *testing.T, svc *service.Service, jobID string, timeout time.D
 			t.Fatalf("get job %s: %v", jobID, err)
 		}
 		if job.State == types.JobStateSucceeded && job.Result != nil {
+			waitForLocalWorkerExit(t, runRoot, jobID, 2*time.Second)
 			return job
 		}
 		if job.State == types.JobStateFailed {
@@ -53,6 +56,28 @@ func waitForJob(t *testing.T, svc *service.Service, jobID string, timeout time.D
 	return types.Job{}
 }
 
+func waitForLocalWorkerExit(t *testing.T, runRoot, jobID string, timeout time.Duration) {
+	t.Helper()
+
+	pidPath := filepath.Join(runRoot, jobID, "local.pid")
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); err != nil {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 func hasArtifact(artifacts []types.Artifact, artifactID string) bool {
 	for _, artifact := range artifacts {
 		if artifact.ArtifactID == artifactID {
@@ -60,6 +85,37 @@ func hasArtifact(artifacts []types.Artifact, artifactID string) bool {
 		}
 	}
 	return false
+}
+
+func anyStrings(values []any) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		text, _ := value.(string)
+		if text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func inspectionEvidenceCorpus(payload map[string]any) string {
+	evidence, _ := payload["evidence"].([]any)
+	encoded, _ := json.Marshal(evidence)
+	return string(encoded)
+}
+
+func flattenMapField(values []any, field string) []any {
+	out := make([]any, 0, len(values))
+	for _, value := range values {
+		item, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if item[field] != nil {
+			out = append(out, item[field])
+		}
+	}
+	return out
 }
 
 func writeTestFile(t *testing.T, path string, body string) {

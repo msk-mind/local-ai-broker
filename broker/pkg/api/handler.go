@@ -1,11 +1,16 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/msk-mind/local-ai-broker/broker/pkg/audit"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/auth"
@@ -13,6 +18,7 @@ import (
 	"github.com/msk-mind/local-ai-broker/broker/pkg/policy"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/service"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/store"
+	"github.com/msk-mind/local-ai-broker/broker/pkg/tasks"
 	"github.com/msk-mind/local-ai-broker/broker/pkg/types"
 )
 
@@ -22,6 +28,25 @@ type Handler struct {
 	auditLogPath  string
 	mux           *http.ServeMux
 }
+
+type pathAction struct {
+	suffix  string
+	handler func(http.ResponseWriter, *http.Request, string)
+}
+
+type releasedResultWaitDiagnostics struct {
+	requestStartedUnixNS  int64
+	initialFetchUnixNS    int64
+	releaseObservedUnixNS int64
+	responseReadyUnixNS   int64
+	pollCount             int
+}
+
+const (
+	defaultReleasedResultWaitPollInterval = 10 * time.Millisecond
+	minimumReleasedResultWaitPollInterval = 2 * time.Millisecond
+	maximumReleasedResultWaitPollInterval = 4 * time.Millisecond
+)
 
 func NewHandler(svc *service.Service, authenticator *auth.Authenticator) *Handler {
 	return NewHandlerWithAudit(svc, authenticator, "")
@@ -61,11 +86,9 @@ func (h *Handler) routes() {
 	h.mux.HandleFunc("/v1/jobs", h.handleJobs)
 	h.mux.HandleFunc("/v1/jobs/", h.handleJobByID)
 	h.mux.HandleFunc("/v1/roots/", h.handleRootByID)
-	h.mux.HandleFunc("/v1/rag/compressions", h.handleRAGAlias("rag_compress", "rag_evidence_pack_v1"))
-	h.mux.HandleFunc("/v1/rag/debug-sessions", h.handleRAGAlias("debug_with_local_context", "debug_evidence_pack_v1"))
-	h.mux.HandleFunc("/v1/logs:summarize", h.handleRAGAlias("summarize_logs", "log_evidence_pack_v1"))
-	h.mux.HandleFunc("/v1/repos:inspect", h.handleRAGAlias("inspect_repo", "repo_inspection_pack_v1"))
-	h.mux.HandleFunc("/v1/patches:propose", h.handleRAGAlias("propose_patch", "patch_proposal_pack_v1"))
+	for _, spec := range tasks.RAGAliasSpecs() {
+		h.mux.HandleFunc(spec.HTTPPath, h.handleRAGAlias(spec))
+	}
 	h.mux.HandleFunc("/v1/rag/evidence-packs/", h.handleRAGEvidencePackMetadata)
 	h.mux.HandleFunc("/v1/rag/indexes/", h.handleRAGIndexMetadata)
 	h.mux.HandleFunc("/v1/rag/cache:lookup", h.handleRAGCacheLookup)
@@ -77,63 +100,41 @@ func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (h *Handler) handleRAGAlias(taskType, schemaName string) http.HandlerFunc {
+func (h *Handler) handleRAGAlias(spec tasks.Spec) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 			return
 		}
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		var raw json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid job request body")
 			return
 		}
-		var req types.SubmitJobRequest
-		reqBytes, _ := json.Marshal(payload)
-		if err := json.Unmarshal(reqBytes, &req); err != nil {
+		req, err := tasks.DecodeSubmitRequest(raw, spec)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid job request body")
 			return
 		}
-		req.TaskType = taskType
-		req.OutputSchema = types.OutputSchemaRef{Name: schemaName}
-		req.TaskParams = normalizeRAGTaskParams(req.TaskParams, payload, taskType)
-		resp, err := h.service.SubmitJob(r.Context(), req)
+		submitStartedUnixNS := time.Now().UnixNano()
+		submitCtx := r.Context()
+		if req.TaskType == "inspect_repo" {
+			submitCtx = service.WithPreferInlineLocalRelease(submitCtx)
+		}
+		resp, err := h.service.SubmitJob(submitCtx, req)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
 		}
+		if resp.ReleasedResult != nil {
+			annotateReleaseBrokerLifecycle(resp.ReleasedResult, map[string]any{
+				"broker_submit_request_started_unix_ns": submitStartedUnixNS,
+				"broker_submit_response_ready_unix_ns":  time.Now().UnixNano(),
+				"broker_submit_inline_release":          true,
+			})
+		}
 		writeJSON(w, http.StatusAccepted, resp)
 	}
-}
-
-func normalizeRAGTaskParams(taskParams map[string]any, payload map[string]any, taskType string) map[string]any {
-	out := make(map[string]any, len(taskParams)+2)
-	for k, v := range taskParams {
-		out[k] = v
-	}
-	if value, ok := payload["query"]; ok {
-		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-			out["query"] = text
-		}
-	}
-	if value, ok := payload["problem"]; ok {
-		if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
-			out["problem"] = text
-		}
-	}
-	if value, ok := payload["retrieval_strategies"]; ok {
-		if strategies, ok := value.([]any); ok && len(strategies) > 0 {
-			out["retrieval_strategies"] = strategies
-		}
-	}
-	if taskType == "debug_with_local_context" {
-		if _, ok := out["problem"]; !ok {
-			if text, ok := payload["problem"].(string); ok {
-				out["problem"] = text
-			}
-		}
-	}
-	return out
 }
 
 func (h *Handler) handleAuditHealth(w http.ResponseWriter, r *http.Request) {
@@ -165,15 +166,25 @@ func (h *Handler) handleAuditHealth(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleJobs(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON request body")
 			return
 		}
-		if _, ok := payload["children"]; ok {
-			reqBytes, _ := json.Marshal(payload)
+		if len(bytes.TrimSpace(raw)) == 0 {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON request body")
+			return
+		}
+		var envelope struct {
+			Children json.RawMessage `json:"children"`
+		}
+		if err := json.Unmarshal(raw, &envelope); err != nil {
+			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON request body")
+			return
+		}
+		if envelope.Children != nil {
 			var req types.SubmitParallelJobsRequest
-			if err := json.Unmarshal(reqBytes, &req); err != nil {
+			if err := json.Unmarshal(raw, &req); err != nil {
 				writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid parallel job request body")
 				return
 			}
@@ -185,17 +196,28 @@ func (h *Handler) handleJobs(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusAccepted, resp)
 			return
 		}
-		reqBytes, _ := json.Marshal(payload)
 		var req types.SubmitJobRequest
-		if err := json.Unmarshal(reqBytes, &req); err != nil {
+		if err := json.Unmarshal(raw, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid job request body")
 			return
 		}
 
-		resp, err := h.service.SubmitJob(r.Context(), req)
+		submitStartedUnixNS := time.Now().UnixNano()
+		submitCtx := r.Context()
+		if req.TaskType == "inspect_repo" {
+			submitCtx = service.WithPreferInlineLocalRelease(submitCtx)
+		}
+		resp, err := h.service.SubmitJob(submitCtx, req)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
 			return
+		}
+		if resp.ReleasedResult != nil {
+			annotateReleaseBrokerLifecycle(resp.ReleasedResult, map[string]any{
+				"broker_submit_request_started_unix_ns": submitStartedUnixNS,
+				"broker_submit_response_ready_unix_ns":  time.Now().UnixNano(),
+				"broker_submit_inline_release":          true,
+			})
 		}
 		writeJSON(w, http.StatusAccepted, resp)
 	case http.MethodGet:
@@ -207,65 +229,38 @@ func (h *Handler) handleJobs(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleJobByID(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
-	if strings.HasSuffix(path, ":cancel") {
-		jobID := strings.TrimSuffix(path, ":cancel")
-		h.handleCancelJob(w, r, jobID)
-		return
-	}
-	if strings.HasSuffix(path, ":retry-recommended") {
-		jobID := strings.TrimSuffix(path, ":retry-recommended")
-		h.handleRetryRecommendedJob(w, r, jobID)
-		return
-	}
-	if strings.HasSuffix(path, "/retry-recommendation") {
-		jobID := strings.TrimSuffix(path, "/retry-recommendation")
-		h.handleGetRetryRecommendation(w, r, jobID)
-		return
-	}
-	if strings.HasSuffix(path, "/result") {
-		jobID := strings.TrimSuffix(path, "/result")
-		h.handleFetchResult(w, r, jobID)
-		return
-	}
-	if strings.HasSuffix(path, "/logs") {
-		jobID := strings.TrimSuffix(path, "/logs")
-		h.handleFetchLogs(w, r, jobID)
+	if dispatchPathAction(w, r, path, []pathAction{
+		{suffix: ":cancel", handler: h.handleCancelJob},
+		{suffix: ":retry-recommended", handler: h.handleRetryRecommendedJob},
+		{suffix: "/retry-recommendation", handler: h.handleGetRetryRecommendation},
+		{suffix: "/result", handler: h.handleFetchResult},
+		{suffix: "/logs", handler: h.handleFetchLogs},
+	}) {
 		return
 	}
 	h.handleGetJob(w, r, path)
 }
 
 func (h *Handler) handleRAGEvidencePackMetadata(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
-		return
-	}
-	path := strings.TrimPrefix(r.URL.Path, "/v1/rag/evidence-packs/")
-	if !strings.HasSuffix(path, "/metadata") {
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "endpoint not found")
-		return
-	}
-	artifactID := strings.TrimSuffix(path, "/metadata")
-	meta, err := h.service.GetArtifactMetadata(r.Context(), artifactID, map[string]struct{}{"evidence_pack": {}})
-	if err != nil {
-		handleServiceError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, meta)
+	h.handleArtifactMetadata(w, r, "/v1/rag/evidence-packs/", map[string]struct{}{"evidence_pack": {}})
 }
 
 func (h *Handler) handleRAGIndexMetadata(w http.ResponseWriter, r *http.Request) {
+	h.handleArtifactMetadata(w, r, "/v1/rag/indexes/", map[string]struct{}{"retrieval_result": {}, "chunk_manifest": {}})
+}
+
+func (h *Handler) handleArtifactMetadata(w http.ResponseWriter, r *http.Request, prefix string, allowedTypes map[string]struct{}) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 		return
 	}
-	path := strings.TrimPrefix(r.URL.Path, "/v1/rag/indexes/")
+	path := strings.TrimPrefix(r.URL.Path, prefix)
 	if !strings.HasSuffix(path, "/metadata") {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "endpoint not found")
 		return
 	}
 	artifactID := strings.TrimSuffix(path, "/metadata")
-	meta, err := h.service.GetArtifactMetadata(r.Context(), artifactID, map[string]struct{}{"retrieval_result": {}, "chunk_manifest": {}})
+	meta, err := h.service.GetArtifactMetadata(r.Context(), artifactID, allowedTypes)
 	if err != nil {
 		handleServiceError(w, err)
 		return
@@ -319,14 +314,10 @@ func (h *Handler) handleRetryRecommendedJob(w http.ResponseWriter, r *http.Reque
 
 func (h *Handler) handleRootByID(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/v1/roots/")
-	if strings.HasSuffix(path, ":retry-failed") {
-		rootJobID := strings.TrimSuffix(path, ":retry-failed")
-		h.handleRetryFailedRootShards(w, r, rootJobID)
-		return
-	}
-	if strings.HasSuffix(path, ":release-deferred") {
-		rootJobID := strings.TrimSuffix(path, ":release-deferred")
-		h.handleReleaseDeferredRootChunks(w, r, rootJobID)
+	if dispatchPathAction(w, r, path, []pathAction{
+		{suffix: ":retry-failed", handler: h.handleRetryFailedRootShards},
+		{suffix: ":release-deferred", handler: h.handleReleaseDeferredRootChunks},
+	}) {
 		return
 	}
 	if r.Method != http.MethodGet {
@@ -351,14 +342,12 @@ func (h *Handler) handleRetryFailedRootShards(w http.ResponseWriter, r *http.Req
 		RootJobID:       rootJobID,
 		ResubmitReducer: true,
 	}
-	if r.Body != nil && r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid retry request body")
-			return
-		}
-		if strings.TrimSpace(req.RootJobID) == "" {
-			req.RootJobID = rootJobID
-		}
+	if err := decodeOptionalJSONBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid retry request body")
+		return
+	}
+	if strings.TrimSpace(req.RootJobID) == "" {
+		req.RootJobID = rootJobID
 	}
 	resp, err := h.service.RetryFailedRootShards(r.Context(), req)
 	if err != nil {
@@ -376,14 +365,12 @@ func (h *Handler) handleReleaseDeferredRootChunks(w http.ResponseWriter, r *http
 	req := types.ReleaseDeferredRootChunksRequest{
 		RootJobID: rootJobID,
 	}
-	if r.Body != nil && r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid release request body")
-			return
-		}
-		if strings.TrimSpace(req.RootJobID) == "" {
-			req.RootJobID = rootJobID
-		}
+	if err := decodeOptionalJSONBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", "invalid release request body")
+		return
+	}
+	if strings.TrimSpace(req.RootJobID) == "" {
+		req.RootJobID = rootJobID
 	}
 	resp, err := h.service.ReleaseDeferredRootChunks(r.Context(), req)
 	if err != nil {
@@ -425,13 +412,161 @@ func (h *Handler) handleFetchResult(w http.ResponseWriter, r *http.Request, jobI
 		return
 	}
 
-	release, err := h.service.GetReleasedResult(r.Context(), jobID)
+	waitMS, err := parseNonNegativeIntQuery(r, "wait_ms")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+	pollIntervalMS, err := parseNonNegativeIntQuery(r, "poll_interval_ms")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST", err.Error())
+		return
+	}
+
+	release, diagnostics, err := h.waitForReleasedResult(r.Context(), jobID, waitMS, pollIntervalMS)
 	if err != nil {
 		handleServiceError(w, err)
 		return
 	}
+	diagnostics.responseReadyUnixNS = time.Now().UnixNano()
+	annotateReleaseBrokerLifecycle(&release, map[string]any{
+		"broker_result_request_started_unix_ns":  diagnostics.requestStartedUnixNS,
+		"broker_result_initial_fetch_unix_ns":    diagnostics.initialFetchUnixNS,
+		"broker_result_release_observed_unix_ns": diagnostics.releaseObservedUnixNS,
+		"broker_result_response_ready_unix_ns":   diagnostics.responseReadyUnixNS,
+		"broker_result_poll_count":               diagnostics.pollCount,
+	})
 
 	writeJSON(w, http.StatusOK, release)
+}
+
+func (h *Handler) waitForReleasedResult(ctx context.Context, jobID string, waitMS, pollIntervalMS int) (types.JobResultRelease, releasedResultWaitDiagnostics, error) {
+	diagnostics := releasedResultWaitDiagnostics{
+		requestStartedUnixNS: time.Now().UnixNano(),
+	}
+	initialFetchCtx := ctx
+	pollFetchCtx := service.WithSkipInspectRepoResultProbe(ctx)
+	if waitMS <= 0 {
+		initialFetchCtx = pollFetchCtx
+	}
+	diagnostics.initialFetchUnixNS = time.Now().UnixNano()
+	release, err := h.service.GetReleasedResult(initialFetchCtx, jobID)
+	if err != nil {
+		return types.JobResultRelease{}, diagnostics, err
+	}
+	if waitMS <= 0 || release.Result != nil || isTerminalReleaseState(release.State) {
+		diagnostics.releaseObservedUnixNS = time.Now().UnixNano()
+		return release, diagnostics, nil
+	}
+	current := release
+
+	waitCtx, cancel := context.WithTimeout(ctx, time.Duration(waitMS)*time.Millisecond)
+	defer cancel()
+
+	interval := releasedResultWaitPollInterval(pollIntervalMS)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-waitCtx.Done():
+			return current, diagnostics, nil
+		case <-ticker.C:
+			diagnostics.pollCount++
+			current, err = h.service.GetReleasedResult(pollFetchCtx, jobID)
+			if err != nil {
+				return types.JobResultRelease{}, diagnostics, err
+			}
+			if current.Result != nil || isTerminalReleaseState(current.State) {
+				diagnostics.releaseObservedUnixNS = time.Now().UnixNano()
+				return current, diagnostics, nil
+			}
+		}
+	}
+}
+
+func releasedResultWaitPollInterval(pollIntervalMS int) time.Duration {
+	interval := defaultReleasedResultWaitPollInterval
+	if pollIntervalMS > 0 {
+		interval = time.Duration(pollIntervalMS) * time.Millisecond
+	}
+	if interval < minimumReleasedResultWaitPollInterval {
+		interval = minimumReleasedResultWaitPollInterval
+	}
+	if interval > maximumReleasedResultWaitPollInterval {
+		interval = maximumReleasedResultWaitPollInterval
+	}
+	return interval
+}
+
+func annotateReleaseBrokerLifecycle(release *types.JobResultRelease, fields map[string]any) {
+	if release == nil || release.Result == nil || len(fields) == 0 {
+		return
+	}
+	payload := cloneAnyMap(release.Result.Payload)
+	runtime := cloneAnyMap(mapValue(payload["runtime"]))
+	lifecycle := cloneAnyMap(mapValue(runtime["broker_lifecycle"]))
+	for key, value := range fields {
+		lifecycle[key] = value
+	}
+	runtime["broker_lifecycle"] = lifecycle
+	payload["runtime"] = runtime
+	release.Result.Payload = payload
+}
+
+func cloneAnyMap(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return map[string]any{}
+	}
+	cloned := make(map[string]any, len(input))
+	for key, value := range input {
+		cloned[key] = cloneAnyValue(value)
+	}
+	return cloned
+}
+
+func cloneAnyValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneAnyMap(typed)
+	case []any:
+		cloned := make([]any, len(typed))
+		for i, item := range typed {
+			cloned[i] = cloneAnyValue(item)
+		}
+		return cloned
+	case []string:
+		cloned := make([]string, len(typed))
+		copy(cloned, typed)
+		return cloned
+	default:
+		return typed
+	}
+}
+
+func mapValue(value any) map[string]any {
+	typed, _ := value.(map[string]any)
+	return typed
+}
+
+func parseNonNegativeIntQuery(r *http.Request, key string) (int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("invalid %s", key)
+	}
+	return value, nil
+}
+
+func isTerminalReleaseState(state types.JobState) bool {
+	switch state {
+	case types.JobStateSucceeded, types.JobStateFailed, types.JobStateCancelled, types.JobStatePreempted, types.JobStateTimedOut:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *Handler) handleFetchLogs(w http.ResponseWriter, r *http.Request, jobID string) {
@@ -501,4 +636,21 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func dispatchPathAction(w http.ResponseWriter, r *http.Request, path string, actions []pathAction) bool {
+	for _, action := range actions {
+		if strings.HasSuffix(path, action.suffix) {
+			action.handler(w, r, strings.TrimSuffix(path, action.suffix))
+			return true
+		}
+	}
+	return false
+}
+
+func decodeOptionalJSONBody(r *http.Request, dst any) error {
+	if r.Body == nil || r.ContentLength == 0 {
+		return nil
+	}
+	return json.NewDecoder(r.Body).Decode(dst)
 }

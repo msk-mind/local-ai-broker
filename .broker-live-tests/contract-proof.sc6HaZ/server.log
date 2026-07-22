@@ -1,5 +1,0 @@
-broker-server 2026/07/14 09:49:10 audit verification ok path=.broker-live-tests/contract-proof.sc6HaZ/audit.jsonl events=0 last_hash=
-broker-server 2026/07/14 09:49:10 listening on 127.0.0.1:36101
-broker-server 2026/07/14 09:49:11 submitted job=job_772c3b9ba022ef2e task_type=inspect_repo backend_run_id=job_772c3b9ba022ef2e cache_key_ms=448 stage_bundle_ms=5 backend_submit_ms=23 total_submit_ms=489
-broker-server 2026/07/14 09:49:27 submitted job=job_882455061701ff29 task_type=inspect_repo backend_run_id=job_882455061701ff29 cache_key_ms=435 stage_bundle_ms=10 backend_submit_ms=15 total_submit_ms=471
-broker-server 2026/07/14 09:49:27 received signal terminated, shutting down

@@ -1,9 +1,0 @@
-{
-  "schema": "gpu_semantic_index_v2",
-  "cache_file_size_bytes": 217,
-  "document_keys": [
-    "id",
-    "vector"
-  ],
-  "document_count": 3
-}

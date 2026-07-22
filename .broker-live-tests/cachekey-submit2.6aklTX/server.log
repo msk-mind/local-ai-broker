@@ -1,5 +1,0 @@
-broker-server 2026/07/14 09:06:27 audit verification ok path=.broker-live-tests/cachekey-submit2.6aklTX/audit.jsonl events=0 last_hash=
-broker-server 2026/07/14 09:06:27 listening on 127.0.0.1:38693
-broker-server 2026/07/14 09:06:28 submitted job=job_2fdc26654d83d636 task_type=inspect_repo backend_run_id=job_2fdc26654d83d636 cache_key_ms=545 stage_bundle_ms=6 backend_submit_ms=24 total_submit_ms=590
-broker-server 2026/07/14 09:06:28 submitted job=job_ad5b58cb4abc6ae4 task_type=inspect_repo backend_run_id=job_ad5b58cb4abc6ae4 cache_key_ms=314 stage_bundle_ms=11 backend_submit_ms=3 total_submit_ms=339
-broker-server 2026/07/14 09:06:29 received signal terminated, shutting down

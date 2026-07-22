@@ -1,4 +1,0 @@
-broker-server 2026/07/14 09:46:23 audit verification ok path=.broker-live-tests/restart-proof1.EZkG8J/audit.jsonl events=0 last_hash=
-broker-server 2026/07/14 09:46:23 listening on 127.0.0.1:39657
-broker-server 2026/07/14 09:46:24 submitted job=job_a1438c472abfda6a task_type=inspect_repo backend_run_id=job_a1438c472abfda6a cache_key_ms=290 stage_bundle_ms=9 backend_submit_ms=14 total_submit_ms=322
-broker-server 2026/07/14 09:46:35 received signal terminated, shutting down

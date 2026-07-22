@@ -1,9 +1,0 @@
-{
-  "job_id": "job_ba89e3b2072bd213",
-  "state": "completed",
-  "phase": "completed",
-  "percent": 100,
-  "message": "Worker finished",
-  "timestamp": "2026-07-13T18:07:05Z",
-  "metrics": {"exit_code": 0}}
-}

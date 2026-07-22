@@ -1,6 +1,0 @@
-{
-  "ok": false,
-  "errors": [
-    "missing required broker-hint checks: ['warm_query_stage_cache_hit']"
-  ]
-}

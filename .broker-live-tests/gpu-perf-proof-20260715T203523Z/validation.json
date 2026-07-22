@@ -1,6 +1,0 @@
-{
-  "ok": false,
-  "errors": [
-    "missing required broker-hint checks: ['cold_broker_hint_skips_repository_fingerprint', 'warm_broker_hint_skips_repository_fingerprint', 'partial_dirty_broker_hint_skips_repository_fingerprint']"
-  ]
-}

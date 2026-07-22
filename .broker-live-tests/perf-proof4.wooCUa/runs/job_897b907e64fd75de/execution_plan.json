@@ -1,1 +1,0 @@
-{"execution_profile":{"tier":"cpu-rag-indexing","runtime":"deterministic"},"job_id":"job_897b907e64fd75de","repo_inspection_cache_path":".broker-live-tests/perf-proof4.wooCUa/runs/repo-inspection-cache","resource_tier":"cpu-rag-indexing","runtime_backend":"deterministic","runtime_connection":{"base_url":"","timeout_seconds":0},"selected_model":"","task_type":"inspect_repo"}

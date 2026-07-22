@@ -1,9 +1,0 @@
-{
-  "schema": "gpu_service_demand_response_v1",
-  "request_id": "req_2e29ae90fa1792cf8c4e1a511e2ae691",
-  "demand_id": "gpu-demand-8b58e21e90eeba07",
-  "state": "launching",
-  "failure_category": "availability",
-  "updated_at": "2026-07-13T20:49:49.193315325Z",
-  "signature": "25423569b70f7641204351e8d564fd116df8260901835112dfb59e86aae1eb36"
-}

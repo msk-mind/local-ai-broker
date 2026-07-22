@@ -1,5 +1,0 @@
-broker-server 2026/07/14 08:39:08 audit verification ok path=.broker-live-tests/perf-proof2.a6xxee/audit.jsonl events=0 last_hash=
-broker-server 2026/07/14 08:39:08 listening on 127.0.0.1:57655
-broker-server 2026/07/14 08:39:09 submitted job=job_b9199799670acf4f task_type=inspect_repo backend_run_id=job_b9199799670acf4f cache_key_ms=589 stage_bundle_ms=58 backend_submit_ms=33 total_submit_ms=724
-broker-server 2026/07/14 08:39:35 cache hit job=job_4cc469a9a1672718 source_job=job_b9199799670acf4f task_type=inspect_repo cache_key_ms=645 cache_lookup_ms=13 total_submit_ms=704
-broker-server 2026/07/14 08:39:36 received signal terminated, shutting down

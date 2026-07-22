@@ -1,9 +1,0 @@
-{
-  "input_refs": [
-    {
-      "type": "repo",
-      "uri": "file:///tmp/local-ai-broker-e2e-fixture"
-    }
-  ],
-  "job_id": "job_fccec232fc5b2880"
-}

@@ -1,1 +1,0 @@
-{"schema":"repo-inspection-discovery-manifest-v1","roots":{"/tmp/tmpd7fcfixu":{"git_top":"/tmp/tmpd7fcfixu","scope_rel":".","scope_oid":"9650e0348b6ea94bb8667c28c7d204c64133f828","files":["mcp.go","service.py"]}}}

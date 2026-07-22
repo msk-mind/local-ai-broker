@@ -1,5 +1,0 @@
-broker-server 2026/07/14 09:44:00 audit verification ok path=.broker-live-tests/lexical-helper-proof.BQjsvy/audit.jsonl events=0 last_hash=
-broker-server 2026/07/14 09:44:00 listening on 127.0.0.1:41979
-broker-server 2026/07/14 09:44:01 submitted job=job_101b2f8178ba5633 task_type=inspect_repo backend_run_id=job_101b2f8178ba5633 cache_key_ms=171 stage_bundle_ms=2 backend_submit_ms=14 total_submit_ms=192
-broker-server 2026/07/14 09:44:11 submitted job=job_1a67530674049eaa task_type=inspect_repo backend_run_id=job_1a67530674049eaa cache_key_ms=297 stage_bundle_ms=11 backend_submit_ms=25 total_submit_ms=351
-broker-server 2026/07/14 09:44:13 received signal terminated, shutting down

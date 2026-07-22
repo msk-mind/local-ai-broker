@@ -1,9 +1,0 @@
-{
-  "input_refs": [
-    {
-      "type": "repo",
-      "uri": "file:///gpfs/mskmind_ess/limr/repos/local-ai-broker"
-    }
-  ],
-  "job_id": "job_ba89e3b2072bd213"
-}

@@ -1,8 +1,0 @@
-Broker worker started
-Broker job ID: job_b2412be7e08d84d8
-Task type: inspect_repo
-Output dir: .broker-live-tests/perf-proof-fixture-mFJkOy/runs/job_b2412be7e08d84d8
-Repo root: /gpfs/cdsi_ess/home/limr/ess/repos/local-ai-broker
-Node: pllimsksparky1
-Execution plan: .broker-live-tests/perf-proof-fixture-mFJkOy/runs/job_b2412be7e08d84d8/execution_plan.json
-Broker worker completed

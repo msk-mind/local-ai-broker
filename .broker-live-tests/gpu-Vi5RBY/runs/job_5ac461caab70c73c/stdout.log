@@ -1,8 +1,0 @@
-Broker worker started
-Broker job ID: job_5ac461caab70c73c
-Task type: inspect_repo
-Output dir: /gpfs/mskmind_ess/limr/repos/local-ai-broker/.broker-live-tests/gpu-Vi5RBY/runs/job_5ac461caab70c73c
-Repo root: /gpfs/mskmind_ess/limr/repos/local-ai-broker
-Node: pllimsksparky1
-Execution plan: /gpfs/mskmind_ess/limr/repos/local-ai-broker/.broker-live-tests/gpu-Vi5RBY/runs/job_5ac461caab70c73c/execution_plan.json
-Broker worker completed

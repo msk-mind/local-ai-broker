@@ -1,1 +1,0 @@
-{"attempts":[{"operation":"semantic_retrieval","tier":"p40-retrieval","slurm_job_id":"","gpu_count":1,"gpu_type":"","model_profile":"","attempt":1,"status":"failed","failure_category":"availability","escalation_reason":"primary_retrieval"}]}

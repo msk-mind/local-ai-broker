@@ -241,7 +241,7 @@ def normalize_token_budgets(constraints):
         ),
         "synthesis_context_token_budget": _positive_int(
             constraints.get("synthesis_context_token_budget", constraints.get("remote_model_context_budget")),
-            24_000,
+            16_000,
             "synthesis_context_token_budget",
         ),
     }

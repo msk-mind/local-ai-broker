@@ -636,7 +636,7 @@ def _git_scope_head_oid(top: Path, scope_rel: str):
 
 def _git_scope_inventory_identity(top: Path, scope_rel: str, *, git_probe_cache=None):
     if scope_rel in {"", "."}:
-        repo_head_bucket = _git_probe_cache_bucket(git_probe_cache, "repo_head")
+        repo_head_bucket = _git_probe_cache_bucket(git_probe_cache, "repo_tree")
         repo_head_key = str(top.resolve(strict=False))
         if repo_head_bucket is not None and repo_head_key in repo_head_bucket:
             cached = str(repo_head_bucket[repo_head_key] or "").strip()
@@ -749,6 +749,25 @@ def _metadata_source_candidates_cache_key(root: Path, ignored: set[str], ignored
         tuple(sorted(str(name) for name in ignored)),
         tuple(relative_ignored_paths),
     )
+
+
+def _metadata_source_inventory(root: Path, ignored: set[str], ignored_paths=None):
+    root = Path(root).resolve(strict=False)
+    found = []
+    for current_root, dirnames, filenames in os.walk(root):
+        current_path = Path(current_root)
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if not _should_skip(current_path / name, root, ignored, ignored_paths=ignored_paths)
+        ]
+        for name in filenames:
+            candidate = current_path / name
+            if candidate.is_symlink() or _should_skip(candidate, root, ignored, ignored_paths=ignored_paths):
+                continue
+            if language_for_path(candidate):
+                found.append(candidate.relative_to(root).as_posix())
+    return tuple(sorted(found))
 
 
 def _normalize_touched_paths_hint(touched_paths):
@@ -1194,9 +1213,15 @@ def _cached_metadata_source_candidates(root: Path, ignored: set[str], ignored_pa
         return None
     cache_key = _metadata_source_candidates_cache_key(root, ignored, ignored_paths=ignored_paths)
     cached = bucket.get(cache_key)
-    if not isinstance(cached, list):
+    if not isinstance(cached, dict):
         return None
-    return [Path(candidate) for candidate in cached]
+    if tuple(cached.get("inventory") or ()) != _metadata_source_inventory(root, ignored, ignored_paths=ignored_paths):
+        bucket.pop(cache_key, None)
+        return None
+    candidates = cached.get("candidates")
+    if not isinstance(candidates, list):
+        return None
+    return [Path(candidate) for candidate in candidates]
 
 
 def _store_metadata_source_candidates(root: Path, ignored: set[str], candidates, ignored_paths=None, *, git_probe_cache=None):
@@ -1204,7 +1229,10 @@ def _store_metadata_source_candidates(root: Path, ignored: set[str], candidates,
     if bucket is None:
         return
     cache_key = _metadata_source_candidates_cache_key(root, ignored, ignored_paths=ignored_paths)
-    bucket[cache_key] = [str(Path(candidate).resolve(strict=False)) for candidate in candidates]
+    bucket[cache_key] = {
+        "inventory": _metadata_source_inventory(root, ignored, ignored_paths=ignored_paths),
+        "candidates": [str(Path(candidate).resolve(strict=False)) for candidate in candidates],
+    }
 
 
 def _normalize_scope_paths(top: Path, scope_paths):
@@ -2776,6 +2804,21 @@ def _cached_git_source_files(
             "filter_key": filter_key,
             "files": ordered_files,
         }
+    if prefer_inventory_delta and filter_matches:
+        tracked_signatures = _git_probe_cache_bucket(git_probe_cache, "tracked_blob_signatures")
+        tracked_for_top = dict((tracked_signatures or {}).get(str(top.resolve(strict=False))) or {})
+        if tracked_for_top and all(
+            rel in tracked_for_top and (root_resolved / rel).is_file() for rel in previous_files
+        ):
+            current = list(previous_files)
+            return [root_resolved / rel for rel in current], {
+                "git_top": str(top),
+                "scope_rel": scope_rel,
+                "scope_oid": str(previous_record.get("scope_oid") or ""),
+                "repository_state_fingerprint": str(repository_state_fingerprint or ""),
+                "filter_key": filter_key,
+                "files": current,
+            }
     cached_status_snapshot = _cached_scoped_status_snapshot(top, scope_rel, git_probe_cache=git_probe_cache)
     if (
         prefer_inventory_delta
@@ -2801,7 +2844,10 @@ def _cached_git_source_files(
     if not scope_oid or scope_oid != str(previous_record.get("scope_oid") or ""):
         return None, None
     normalized_scope_paths = [] if scope_rel in {"", "."} else [scope_rel]
-    if prefer_inventory_delta:
+    # Small repositories are cheaper and safer to validate through the normal
+    # status path.  The inventory-delta subprocess is reserved for larger
+    # manifests where it avoids a full working-tree walk.
+    if prefer_inventory_delta and len(previous_files) > SMALL_REPO_INVENTORY_DELTA_THRESHOLD:
         normalized_scope_paths = [] if scope_rel in {"", "."} else [scope_rel]
         touched = _scoped_git_inventory_delta_paths(
             top,
@@ -3100,11 +3146,22 @@ def discover_source_files(
                 if discovery_record is None:
                     top = _git_top(path)
                     scope_rel = _git_scope_rel(path, top) if top is not None else None
-                    scope_oid = (
-                        _git_scope_inventory_identity(top, scope_rel, git_probe_cache=git_probe_cache)
-                        if top is not None and scope_rel is not None
-                        else ""
-                    )
+                    scope_oid = ""
+                    if top is not None and scope_rel is not None:
+                        tracked_bucket = _git_probe_cache_bucket(git_probe_cache, "tracked_blob_signatures")
+                        tracked_files = dict((tracked_bucket or {}).get(str(top.resolve(strict=False))) or {})
+                        if tracked_files and all(
+                            str(rel) in tracked_files for rel in discovered_rel_paths
+                        ):
+                            scope_oid = str(
+                                (_git_probe_cache_bucket(git_probe_cache, "repo_head") or {}).get(
+                                    str(top.resolve(strict=False)), ""
+                                )
+                            )
+                        else:
+                            scope_oid = _git_scope_inventory_identity(
+                                top, scope_rel, git_probe_cache=git_probe_cache
+                            )
                     discovery_record = {
                         "git_top": str(top) if top is not None else "",
                         "scope_rel": scope_rel or "",
@@ -4372,7 +4429,7 @@ def _snapshot_metadata_cache_key(path: Path):
         stat = path.stat()
     except OSError:
         return None
-    return (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+    return (str(path), int(stat.st_mtime_ns), int(stat.st_size), int(getattr(stat, "st_ino", 0)))
 
 
 def _clone_snapshot_metadata(metadata):
@@ -5565,7 +5622,6 @@ def build_syntax_chunks(
             dirty_manifest_entry_keys = set(computed_dirty_manifest_entry_keys)
             have_partial_dirty_manifest = True
             publish_shared_cache_publication = False
-    publish_shared_file_level_cache = bool(publish_shared_cache_publication)
     for item, path, rel_path in discovered_files:
         source_namespace = namespaces[id(item)]
         manifest_entry_key = _file_chunk_manifest_entry_key(source_namespace=source_namespace, rel_path=rel_path)
@@ -5595,6 +5651,7 @@ def build_syntax_chunks(
             signature_probe_files,
             cache_dir=cache_dir,
             git_probe_cache=git_probe_cache,
+            require_tree_probe=bool(repository_state_fingerprint),
         )
         git_signatures.update(reusable_manifest_signatures)
         build_substage["git_file_signatures_ms"] = round((time.perf_counter() - stage_started) * 1000.0, 3)
@@ -6243,12 +6300,55 @@ def _run_git(root: Path, *args, text=False):
 
 
 def _git_top(root: Path):
+    def has_git_metadata(directory: Path):
+        marker = directory / ".git"
+        try:
+            if os.path.isdir(marker):
+                return os.path.isfile(marker / "HEAD")
+            if marker.is_file():
+                return bool(marker.read_text(encoding="utf-8", errors="replace").strip())
+        except OSError:
+            return False
+        return False
+
     cache_key = str(Path(root).resolve(strict=False))
     cached = _GIT_TOP_CACHE.get(cache_key, ...)
     if cached is not ...:
+        # Temporary repositories are frequently created and removed at the
+        # same path.  A path-only negative/positive cache entry must not
+        # survive that lifecycle or it can classify a new tree using the old
+        # repository topology.
+        start = Path(root).resolve(strict=False)
+        current = start if start.is_dir() else start.parent
+        cached_top = None if cached == "" else Path(cached)
+        if cached_top is not None:
+            try:
+                valid = cached_top.is_dir() and has_git_metadata(cached_top) and current.is_relative_to(cached_top)
+            except OSError:
+                valid = False
+            if valid:
+                _GIT_TOP_CACHE.pop(cache_key, None)
+                _GIT_TOP_CACHE[cache_key] = cached
+                return cached_top
+        else:
+            valid = True
+            while True:
+                try:
+                    if has_git_metadata(current):
+                        valid = False
+                        break
+                except OSError:
+                    valid = False
+                    break
+                parent = current.parent
+                if parent == current:
+                    break
+                current = parent
+            if valid:
+                _GIT_TOP_CACHE.pop(cache_key, None)
+                _GIT_TOP_CACHE[cache_key] = cached
+                return None
         _GIT_TOP_CACHE.pop(cache_key, None)
-        _GIT_TOP_CACHE[cache_key] = cached
-        return None if cached == "" else Path(cached)
     start = Path(root).resolve(strict=False)
     current = start if start.is_dir() else start.parent
     visited = set()
@@ -6260,7 +6360,7 @@ def _git_top(root: Path):
         visited.add(current_key)
         git_marker = current / ".git"
         try:
-            if git_marker.exists():
+            if has_git_metadata(current):
                 resolved = current
                 break
         except OSError:
@@ -6410,7 +6510,7 @@ def _write_preferred_git_file_signature_manifest(
         _write_git_file_signature_manifest(local_path, head=head, status=status, signatures=signatures)
 
 
-def _git_file_signatures(discovered_files, *, cache_dir=None, git_probe_cache=None):
+def _git_file_signatures(discovered_files, *, cache_dir=None, git_probe_cache=None, require_tree_probe=False):
     files_by_root = defaultdict(list)
     git_top_by_input_root = {}
     for _item, path, _rel_path in discovered_files:
@@ -6491,10 +6591,12 @@ def _git_file_signatures(discovered_files, *, cache_dir=None, git_probe_cache=No
                 if path is not None:
                     signatures[str(path)] = str(tracked_signature_map[rel])
             continue
-        head_bucket = _git_probe_cache_bucket(git_probe_cache, "repo_head")
+        head_bucket = _git_probe_cache_bucket(git_probe_cache, "repo_tree")
         head_key = str(root.resolve(strict=False))
         if head_bucket is not None and head_key in head_bucket:
             head = head_bucket[head_key]
+        elif not require_tree_probe:
+            head = (_git_probe_cache_bucket(git_probe_cache, "repo_head") or {}).get(head_key, "")
         else:
             head = _run_git_optional(root, "rev-parse", "HEAD^{tree}", text=True)
             if head_bucket is not None:
@@ -7414,6 +7516,10 @@ def _metadata_fingerprint(path: Path, ignored: set[str], ignored_paths=None, cac
             _shared_metadata_manifest_path(root, create=True),
             next_manifest,
         )
+    # Candidate discovery may use rg, Git, or a warm process cache; keep the
+    # repository fingerprint independent of whichever traversal order was
+    # returned by that source.
+    entries.sort(key=lambda item: str(item[0]))
     return {"kind": "metadata", "entries": entries}
 
 
@@ -8230,6 +8336,14 @@ def load_chunks_from_lexical_index(index_path, expected_fingerprint, *, include_
             rows = conn.execute(f"SELECT {columns} FROM chunks ORDER BY rowid").fetchall()
     except sqlite3.Error:
         return None
+    if not rows:
+        # A fingerprint-only refresh can update the working manifest without
+        # rewriting SQLite.  If the manifest still records chunks, use it as
+        # the authoritative lightweight reload path instead of returning an
+        # empty index from a stale/partially restored SQLite file.
+        manifest_chunks = load_chunks_from_lexical_manifest(index_path, expected_fingerprint)
+        if manifest_chunks:
+            return manifest_chunks
     chunks = ChunkList()
     for row in rows:
         (

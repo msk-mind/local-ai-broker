@@ -437,7 +437,7 @@ func KeyDetailsForRequest(req types.SubmitJobRequest) (RequestKeyDetails, error)
 		return RequestKeyDetails{}, nil
 	}
 	input := req.InputRefs[0]
-	if input.Type != "file" && input.Type != "directory" && input.Type != "repo" {
+	if input.Type != "file" && input.Type != "log" && input.Type != "directory" && input.Type != "repo" {
 		return RequestKeyDetails{}, nil
 	}
 
@@ -453,7 +453,7 @@ func KeyDetailsForRequest(req types.SubmitJobRequest) (RequestKeyDetails, error)
 			return RequestKeyDetails{}, err
 		}
 		switch input.Type {
-		case "file":
+		case "file", "log":
 			fileHashStartedAt := time.Now()
 			data, err := os.ReadFile(path)
 			if err != nil {

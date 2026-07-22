@@ -486,6 +486,18 @@ func TestRAGCompressToolCall(t *testing.T) {
 	}
 }
 
+func TestInspectRepoToolCallReportsValidationCause(t *testing.T) {
+	server := &Server{}
+	_, err := server.callRAGTool(context.Background(), "inspect_repo", mustRawJSON(t, `{
+        "query":"inspect the repository",
+        "input_refs":[{"type":"repo","uri":"file:///tmp/repo"}],
+        "constraints":{"final_pack_token_budget":1200}
+    }`))
+	if err == nil || !strings.Contains(err.Error(), "final_pack_token_budget must be at least") {
+		t.Fatalf("expected actionable inspect_repo validation error, got %v", err)
+	}
+}
+
 func TestRAGCompressToolCallPreservesQuery(t *testing.T) {
 	server := newTestServer()
 	initResp := server.handleRequest(context.Background(), request{

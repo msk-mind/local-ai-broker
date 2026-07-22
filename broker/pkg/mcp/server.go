@@ -385,7 +385,7 @@ func (s *Server) callRAGTool(ctx context.Context, toolName string, raw json.RawM
 	}
 	req, err := tasks.DecodeSubmitRequest(raw, spec)
 	if err != nil {
-		return nil, fmt.Errorf("invalid %s arguments", toolName)
+		return nil, fmt.Errorf("invalid %s arguments: %w", toolName, err)
 	}
 	return s.submitAndMaybeWait(ctx, raw, toolName, func(submitCtx context.Context) (types.SubmitJobResponse, error) {
 		return s.service.SubmitJob(submitCtx, req)

@@ -641,6 +641,77 @@ func TestGetJobStatusIncludesRuntimeDiagnostics(t *testing.T) {
 	}
 }
 
+func TestFetchResultPreservesIngestedDegradationAcrossCacheAlias(t *testing.T) {
+	runRoot := t.TempDir()
+	repoRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repoRoot, "README.md"), []byte("fixture\n"), 0o644); err != nil {
+		t.Fatalf("write repo fixture: %v", err)
+	}
+	jobStore := store.NewMemoryJobStore()
+	svc := service.New(jobStore, &queuedOnlyBackend{}, log.New(io.Discard, "", 0), runRoot, ".")
+	ctx := auth.WithPrincipal(context.Background(), mcpTestPrincipal())
+	req := types.SubmitJobRequest{
+		TaskType:     "inspect_repo",
+		InputRefs:    []types.InputRef{{Type: "repo", URI: "file://" + repoRoot, Classification: "internal"}},
+		TaskParams:   map[string]any{"query": "trace routing", "mode": "evidence"},
+		OutputSchema: types.OutputSchemaRef{Name: "repo_inspection_v2"},
+	}
+	first, err := svc.SubmitJob(ctx, req)
+	if err != nil {
+		t.Fatalf("submit source job: %v", err)
+	}
+	result := types.Result{
+		SchemaName: "repo_inspection_v2", SchemaVersion: "2.0.0",
+		Payload: map[string]any{
+			"mode": "evidence", "query": "trace routing", "findings": []any{},
+			"evidence": []any{map[string]any{"id": "ev_1", "path": "README.md", "source_refs": []any{map[string]any{"path": "README.md", "line_start": 1, "line_end": 1}}}},
+			"quality":  map[string]any{"result": "evidence_only", "retrieval": "lexical_degraded", "reranking": "unavailable", "synthesis": "not_requested", "answer_ready": false},
+			"warnings": []any{}, "provenance": map[string]any{"index_fingerprint": "sha256:test"},
+			"runtime": map[string]any{"attempts": []any{}}, "retrieval": map[string]any{"lexical_candidates": 1},
+		},
+	}
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	jobDir := filepath.Join(runRoot, first.JobID)
+	if err := os.WriteFile(filepath.Join(jobDir, "result.json"), resultBytes, 0o644); err != nil {
+		t.Fatalf("write result: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(jobDir, "artifacts.json"), []byte(`[]`), 0o644); err != nil {
+		t.Fatalf("write artifacts: %v", err)
+	}
+	source, err := svc.GetJob(ctx, first.JobID)
+	if err != nil {
+		t.Fatalf("ingest source result: %v", err)
+	}
+	if !source.DegradedLocalExecution || source.ExecutionQuality != "evidence_only" {
+		t.Fatalf("expected ingested degradation flags, got %#v", source)
+	}
+
+	second, err := svc.SubmitJob(ctx, req)
+	if err != nil {
+		t.Fatalf("submit cache alias: %v", err)
+	}
+	if second.Cache.Status != "hit" || second.ReleasedResult == nil {
+		t.Fatalf("expected released cache alias, got %#v", second)
+	}
+	if !second.ReleasedResult.DegradedLocalExecution || second.ReleasedResult.ExecutionQuality != "evidence_only" {
+		t.Fatalf("cache alias lost degradation flags: %#v", second.ReleasedResult)
+	}
+
+	server := NewServer(svc, mcpTestPrincipal())
+	params := mustRawJSON(t, fmt.Sprintf(`{"name":"fetch_result","arguments":{"job_id":%q}}`, second.JobID))
+	resp := server.handleRequest(ctx, request{JSONRPC: "2.0", ID: 1, Method: "tools/call", Params: params})
+	if resp.Error != nil {
+		t.Fatalf("fetch_result error: %v", resp.Error)
+	}
+	structured := resp.Result.(map[string]any)["structuredContent"].(types.JobResultRelease)
+	if !structured.DegradedLocalExecution || structured.ExecutionQuality != "evidence_only" {
+		t.Fatalf("MCP release lost degradation flags: %#v", structured)
+	}
+}
+
 func TestSubmitParallelJobsToolCall(t *testing.T) {
 	server := newTestServer()
 	initResp := server.handleRequest(context.Background(), request{

@@ -1850,12 +1850,26 @@ def _prefetch_repo_state_cache_key(
     cache_dir,
     repository_state_fingerprint,
     build_config_digest,
+    discovered,
 ):
+    input_identity = []
+    for item in list(discovered or ()):
+        if not isinstance(item, dict):
+            continue
+        path = item.get("path")
+        input_identity.append(
+            (
+                str(item.get("id") or ""),
+                str(item.get("type") or ""),
+                str(Path(path).expanduser().resolve(strict=False)) if path is not None else str(item.get("uri") or ""),
+            )
+        )
     return (
         "prefetch_repo_state",
         str(Path(cache_dir).expanduser().resolve(strict=False)),
         str(repository_state_fingerprint or ""),
         str(build_config_digest or ""),
+        tuple(input_identity),
     )
 
 
@@ -2959,11 +2973,22 @@ def prepare_prefetched_state(
             return state
         return _attach_cached_lexical_fallback_run(state)
     prefetched_repo_state_cache_key = None
-    if repository_state_fingerprint and build_config_digest:
+    # Broker-supplied fingerprints identify shared repository state, but do
+    # not prove that this worker process owns a compatible in-memory snapshot.
+    # Resolve those requests through persisted snapshot metadata.  Direct
+    # warm-daemon requests without a broker hint retain the faster process
+    # cache path.
+    if (
+        repository_state_fingerprint
+        and build_config_digest
+        and not broker_repository_state_fingerprint
+        and not bool(execution_plan.get("repo_inspection_use_node_local_cache"))
+    ):
         prefetched_repo_state_cache_key = _prefetch_repo_state_cache_key(
             cache_dir=cache_dir,
             repository_state_fingerprint=repository_state_fingerprint,
             build_config_digest=build_config_digest,
+            discovered=discovered,
         )
         cached_repo_state = _PREFETCH_REPO_STATE_CACHE.get(prefetched_repo_state_cache_key)
         if cached_repo_state is not None:

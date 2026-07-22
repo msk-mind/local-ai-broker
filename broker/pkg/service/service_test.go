@@ -3929,11 +3929,11 @@ func TestSubmitAndIngestRAGCompressionWorker(t *testing.T) {
 	if !got.DegradedLocalExecution {
 		t.Fatalf("expected degraded_local_execution, got %#v", got)
 	}
-	if got.RetryRecommended {
-		t.Fatalf("expected retry_recommended=false for deterministic degraded run, got %#v", got)
+	if !got.RetryRecommended {
+		t.Fatalf("expected retry_recommended=true for deterministic no-real-backend run, got %#v", got)
 	}
-	if got.ExecutionQuality != "degraded_local" {
-		t.Fatalf("expected execution_quality degraded_local, got %#v", got.ExecutionQuality)
+	if got.ExecutionQuality != "no_real_backend" {
+		t.Fatalf("expected execution_quality no_real_backend, got %#v", got.ExecutionQuality)
 	}
 	if got.Result.Payload["query"] != "why did the build fail?" {
 		t.Fatalf("unexpected query payload: %#v", got.Result.Payload)

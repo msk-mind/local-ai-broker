@@ -687,6 +687,11 @@ func TestLocalBackendInspectRepoUsesStructureRetrievalWithoutLLM(t *testing.T) {
 }
 
 func TestLocalBackendInspectRepoFindsRetryEntryPoints(t *testing.T) {
+	// This test creates a content-addressed temporary repository. Isolate the
+	// worker's node-local and shared inspection caches so a prior E2E fixture
+	// with the same file contents cannot supply path-specific evidence.
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("BROKER_REPO_INSPECTION_SHARED_CACHE_DIR", t.TempDir())
 	if _, err := os.Stat("/usr/bin/bash"); err != nil {
 		t.Skip("bash not available")
 	}

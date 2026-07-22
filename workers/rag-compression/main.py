@@ -78,6 +78,10 @@ def main():
     parser.add_argument("--input-manifest", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--heartbeat-path")
+    # The local backend appends this optional completion notification hook to
+    # every staged worker command.  RAG workers still use result-file polling,
+    # but must accept the common worker invocation contract.
+    parser.add_argument("--completion-socket-path")
     args = parser.parse_args()
 
     job_spec = load_json(Path(args.job_spec))
@@ -1418,7 +1422,7 @@ def semantic_overlap_score(text, query_terms):
     return score
 
 
-def build_retrieval_policy_signals(retrieval_trace, selected_chunks, excluded_dir_names, runtime_adapter):
+def build_retrieval_policy_signals(task_type, retrieval_trace, selected_chunks, excluded_dir_names, runtime_adapter):
     executions = retrieval_trace.get("strategy_executions") or []
     mode_counts = Counter()
     degraded = []
@@ -1445,7 +1449,13 @@ def build_retrieval_policy_signals(retrieval_trace, selected_chunks, excluded_di
     warnings = []
     if any(mode_counts.get(mode, 0) > 0 for mode in {"heuristic", "fallback", "unavailable", "configured_local_llm"}):
         warnings.append("LOCAL_RETRIEVAL_DEGRADED")
-    if mode_counts.get("real", 0) == 0:
+    # Deterministic retrieval can still produce useful evidence, but it is
+    # not a real model-backed execution.  Mark that distinction explicitly so
+    # the broker can recommend an escalated retry.  An unavailable configured
+    # model remains a degraded-local case with its own diagnostics.
+    if task_type == "rag_compress" and runtime_mode == "heuristic" and str(runtime_adapter.get("name") or "") == "deterministic":
+        warnings.append("NO_REAL_RETRIEVAL_BACKEND")
+    elif mode_counts.get("real", 0) == 0:
         warnings.append("NO_REAL_RETRIEVAL_BACKEND")
     contaminated_paths = [
         chunk.get("path", "")
@@ -1469,7 +1479,7 @@ def build_result(task_type, job_spec, task_params, constraints, query, discovere
     retrieval["compression_backend"] = runtime_adapter["name"]
     retrieval["runtime_backend_mode"] = runtime_adapter["backend_mode"]
     retrieval["runtime_backend_detail"] = runtime_adapter["backend_detail"]
-    policy_signals = build_retrieval_policy_signals(retrieval_trace, selected_chunks, excluded_dir_names, runtime_adapter)
+    policy_signals = build_retrieval_policy_signals(task_type, retrieval_trace, selected_chunks, excluded_dir_names, runtime_adapter)
     validation = build_validation_report(job_spec["output_schema"]["name"], evidence, retrieval, retrieval_plan, retrieval_trace, policy_signals, chunk_manifest, rerank_result, budget_state, runtime_context, runtime_adapter, excluded_dir_names)
     warnings = list(validation["warnings"])
     artifacts = build_artifacts(task_type, output_dir, evidence, selected_chunks, retrieval, retrieval_plan, retrieval_trace, chunk_manifest, rerank_result, validation, runtime_context, runtime_adapter)

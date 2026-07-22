@@ -9295,6 +9295,16 @@ def lexical_search(index_path, query, chunks, limit=128, *, cache_key=None, feat
         for chunk_id in _matching_chunk_ids_for_term(helper, lowered):
             if chunk_id not in chunk_ids_by_symbol_lower.get(lowered, ()):
                 identifier_bonus_by_chunk[chunk_id] += 2.0
+    # Concept queries such as "find retry logic" often omit the exact public
+    # symbol name.  Keep all matching symbols visible to the diversity pass so
+    # a package-level chunk cannot displace the actual entry point.
+    concept_symbol_bonus_by_chunk = defaultdict(float)
+    for chunk_id, symbol_lower in helper["symbol_lower_by_chunk"].items():
+        if not symbol_lower:
+            continue
+        matches = [term for term in lexical_terms if term in symbol_lower]
+        if matches:
+            concept_symbol_bonus_by_chunk[chunk_id] = min(30.0, 8.0 * len(matches))
     quoted_phrase_bonus_by_chunk = defaultdict(float)
     for phrase in lowered_quoted_phrases:
         for chunk_id in _matching_chunk_ids_for_term(helper, phrase):
@@ -9437,6 +9447,7 @@ def lexical_search(index_path, query, chunks, limit=128, *, cache_key=None, feat
             score += inverse_frequency * (1.0 + (occurrences - 1) * 0.25)
         score += quoted_phrase_bonus_by_chunk.get(chunk_id, 0.0)
         score += identifier_bonus_by_chunk.get(chunk_id, 0.0)
+        score += concept_symbol_bonus_by_chunk.get(chunk_id, 0.0)
         score = ((score * path_policy["pre_multiplier"]) + path_policy["additive"]) * path_policy["post_multiplier"]
         raw_scores[chunk_id] = score
 

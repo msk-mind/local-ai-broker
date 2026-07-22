@@ -13,6 +13,7 @@ def main():
     parser.add_argument("--input-manifest", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--heartbeat-path")
+    parser.add_argument("--completion-socket-path")
     args = parser.parse_args()
 
     job_spec = load_json(Path(args.job_spec))

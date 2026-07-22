@@ -198,6 +198,14 @@ func isDegradedLocalExecution(diagnostics map[string]any) bool {
 func isDegradedResult(taskType string, result types.Result, diagnostics map[string]any) bool {
 	if taskType == "inspect_repo" && result.SchemaName == "repo_inspection_v2" {
 		quality, _ := result.Payload["quality"].(map[string]any)
+		if stringValue(quality["result"]) == "failed" {
+			return true
+		}
+		// Evidence mode intentionally stops before synthesis. A GPU-backed
+		// evidence pack is authoritative evidence, not degraded execution.
+		if stringValue(result.Payload["mode"]) == "evidence" {
+			return stringValue(quality["retrieval"]) != "gpu" || stringValue(quality["reranking"]) != "gpu"
+		}
 		return stringValue(quality["result"]) != "answer_ready"
 	}
 	return isDegradedLocalExecution(diagnostics)

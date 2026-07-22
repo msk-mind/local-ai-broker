@@ -3123,6 +3123,23 @@ func TestRepoInspectionAnswerFailureRetainsResultAndMarksJobFailed(t *testing.T)
 	}
 }
 
+func TestGPUBackedRepoInspectionEvidenceModeIsNotDegraded(t *testing.T) {
+	job := types.Job{TaskType: "inspect_repo"}
+	result := types.Result{
+		SchemaName: "repo_inspection_v2",
+		Payload: map[string]any{
+			"mode": "evidence",
+			"quality": map[string]any{
+				"result": "evidence_only", "retrieval": "gpu", "reranking": "gpu",
+				"synthesis": "not_requested", "answer_ready": false,
+			},
+		},
+	}
+	if isDegradedResult(job.TaskType, result, nil) {
+		t.Fatal("GPU-backed evidence mode must not be marked as degraded local execution")
+	}
+}
+
 func TestGetJobLogsRedactsAndTruncates(t *testing.T) {
 	runRoot := t.TempDir()
 	jobStore := store.NewMemoryJobStore()

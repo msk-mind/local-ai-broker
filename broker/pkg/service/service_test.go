@@ -4855,6 +4855,85 @@ func TestSubmitJobCacheHitForRepoSummary(t *testing.T) {
 	}
 }
 
+func TestSubmitJobCacheHitForAdditionalCacheableTasks(t *testing.T) {
+	tests := map[string]struct {
+		taskType   string
+		inputType  string
+		schemaName string
+		params     map[string]any
+		payload    map[string]any
+	}{
+		"log_analysis": {
+			taskType: "log_analysis", inputType: "file", schemaName: "log_analysis_v1",
+			payload: map[string]any{"summary": "cached log analysis"},
+		},
+		"rag_compress": {
+			taskType: "rag_compress", inputType: "file", schemaName: "rag_evidence_pack_v1",
+			params:  map[string]any{"query": "summarize the cached fixture"},
+			payload: map[string]any{"query": "summarize the cached fixture", "evidence": []any{}},
+		},
+		"summarize_logs": {
+			taskType: "summarize_logs", inputType: "log", schemaName: "log_evidence_pack_v1",
+			payload: map[string]any{"summary": "cached log summary"},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			runRoot := t.TempDir()
+			inputPath := filepath.Join(runRoot, name+".txt")
+			if err := os.WriteFile(inputPath, []byte("stable cache fixture\n"), 0o644); err != nil {
+				t.Fatalf("write input: %v", err)
+			}
+			jobStore := store.NewMemoryJobStore()
+			svc := New(jobStore, fakeBackend{}, log.New(io.Discard, "", 0), runRoot, t.TempDir())
+			req := types.SubmitJobRequest{
+				TaskType:     tc.taskType,
+				InputRefs:    []types.InputRef{{Type: tc.inputType, URI: "file://" + inputPath}},
+				TaskParams:   tc.params,
+				OutputSchema: types.OutputSchemaRef{Name: tc.schemaName},
+			}
+
+			firstResp, err := svc.SubmitJob(context.Background(), req)
+			if err != nil {
+				t.Fatalf("submit first job: %v", err)
+			}
+			firstJob, err := jobStore.GetJob(context.Background(), firstResp.JobID)
+			if err != nil {
+				t.Fatalf("get first job: %v", err)
+			}
+			now := time.Now().UTC()
+			firstJob.State = types.JobStateSucceeded
+			firstJob.Result = &types.Result{SchemaName: tc.schemaName, SchemaVersion: "1.0.0", Payload: tc.payload}
+			firstJob.CompletedAt = &now
+			firstJob.UpdatedAt = now
+			if err := jobStore.UpdateJob(context.Background(), firstJob); err != nil {
+				t.Fatalf("update first job: %v", err)
+			}
+
+			secondResp, err := svc.SubmitJob(context.Background(), req)
+			if err != nil {
+				t.Fatalf("submit second job: %v", err)
+			}
+			if secondResp.Cache.Status != "hit" || secondResp.ReleasedResult == nil {
+				t.Fatalf("expected cache hit with inline result, got %#v", secondResp)
+			}
+			if secondResp.ReleasedResult.Result == nil || secondResp.ReleasedResult.Result.SchemaName != tc.schemaName {
+				t.Fatalf("unexpected cached result: %#v", secondResp.ReleasedResult)
+			}
+			secondJob, err := svc.GetJob(context.Background(), secondResp.JobID)
+			if err != nil {
+				t.Fatalf("get second job: %v", err)
+			}
+			if secondJob.State != types.JobStateSucceeded || secondJob.BackendKind != "cache" {
+				t.Fatalf("expected succeeded cache alias, got %#v", secondJob)
+			}
+			if secondJob.CacheSourceJobID != firstJob.ID {
+				t.Fatalf("expected cache source %q, got %q", firstJob.ID, secondJob.CacheSourceJobID)
+			}
+		})
+	}
+}
+
 func TestSubmitJobCacheHitForInspectRepoAnswerReady(t *testing.T) {
 	runRoot := t.TempDir()
 	repoRoot := filepath.Join(runRoot, "repo")

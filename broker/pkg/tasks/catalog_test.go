@@ -25,6 +25,39 @@ func TestSpecsIncludesInspectRepoAndCacheableTasks(t *testing.T) {
 	}
 }
 
+func TestSpecsHaveExplicitTaskCoverageContracts(t *testing.T) {
+	want := map[string]struct {
+		schema    string
+		cacheable bool
+		inputs    []string
+	}{
+		"document_summary":         {schema: "document_summary_v1", cacheable: true, inputs: []string{"file"}},
+		"log_analysis":             {schema: "log_analysis_v1", cacheable: true, inputs: []string{"file"}},
+		"repo_summary":             {schema: "repo_summary_v1", cacheable: true, inputs: []string{"directory", "repo"}},
+		"rag_compress":             {schema: "rag_evidence_pack_v1", cacheable: true, inputs: []string{"file", "repo", "log", "document", "artifact"}},
+		"debug_with_local_context": {schema: "debug_evidence_pack_v1", cacheable: false, inputs: []string{"repo", "log", "artifact"}},
+		"summarize_logs":           {schema: "log_evidence_pack_v1", cacheable: true, inputs: []string{"log"}},
+		"inspect_repo":             {schema: "repo_inspection_v2", cacheable: true, inputs: []string{"repo", "directory"}},
+		"propose_patch":            {schema: "patch_proposal_pack_v1", cacheable: false, inputs: []string{"repo", "artifact"}},
+	}
+	specs := Specs()
+	if len(specs) != len(want) {
+		t.Fatalf("task catalog has %d specs; add a coverage contract for each task: %#v", len(specs), specs)
+	}
+	for _, spec := range specs {
+		contract, ok := want[spec.Name]
+		if !ok {
+			t.Fatalf("task %q is missing from the coverage contract", spec.Name)
+		}
+		if spec.SchemaName != contract.schema || spec.CacheExact != contract.cacheable {
+			t.Fatalf("task %q contract mismatch: spec=%#v want=%#v", spec.Name, spec, contract)
+		}
+		if strings.Join(spec.Inputs, "\x00") != strings.Join(contract.inputs, "\x00") {
+			t.Fatalf("task %q input contract mismatch: got=%v want=%v", spec.Name, spec.Inputs, contract.inputs)
+		}
+	}
+}
+
 func TestNormalizeTaskParams(t *testing.T) {
 	params := map[string]any{"existing": "keep"}
 	payload := map[string]any{
